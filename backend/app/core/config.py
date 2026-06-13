@@ -1,0 +1,98 @@
+from typing import Annotated, Any, Literal
+
+from pydantic import AnyUrl, BeforeValidator, computed_field
+from pydantic_core import MultiHostUrl
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def parse_list(v: Any) -> list[str] | str:
+    """Parse a comma-separated string into a list (env-friendly)."""
+    if isinstance(v, str) and not v.startswith("["):
+        return [i.strip() for i in v.split(",") if i.strip()]
+    if isinstance(v, list | str):
+        return v
+    raise ValueError(v)
+
+
+class Settings(BaseSettings):
+    """Application settings, loaded from environment / .env."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_ignore_empty=True, extra="ignore"
+    )
+
+    PROJECT_NAME: str = "Tiai"
+    API_V1_STR: str = "/api/v1"
+    ENVIRONMENT: Literal["local", "staging", "production"] = "local"
+    SECRET_KEY: str = "changeme"
+
+    # --- Console auth (admin users) ---
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8
+    # First admin, seeded at startup if it does not exist yet.
+    FIRST_ADMIN_EMAIL: str | None = None
+    FIRST_ADMIN_PASSWORD: str | None = None
+
+    # --- Agent enrollment ---
+    # Shared secret deployed by GPO; only authorizes POST /agent/enroll.
+    ENROLLMENT_SECRET: str = "changeme-enrollment-secret"
+
+    # --- CORS ---
+    BACKEND_CORS_ORIGINS: Annotated[
+        list[AnyUrl] | str, BeforeValidator(parse_list)
+    ] = []
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def all_cors_origins(self) -> list[str]:
+        """All allowed CORS origins."""
+        return [str(o).rstrip("/") for o in self.BACKEND_CORS_ORIGINS]
+
+    # --- PostgreSQL ---
+    POSTGRES_SERVER: str = "db"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_USER: str = "tiai"
+    POSTGRES_PASSWORD: str = ""
+    POSTGRES_DB: str = "tiai"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def SQLALCHEMY_DATABASE_URI(self) -> str:
+        """Async SQLAlchemy DSN (psycopg 3)."""
+        return str(
+            MultiHostUrl.build(
+                scheme="postgresql+psycopg",
+                username=self.POSTGRES_USER,
+                password=self.POSTGRES_PASSWORD,
+                host=self.POSTGRES_SERVER,
+                port=self.POSTGRES_PORT,
+                path=self.POSTGRES_DB,
+            )
+        )
+
+    # --- Redis (ARQ queue) ---
+    REDIS_SERVER: str = "redis"
+    REDIS_PORT: int = 6379
+
+    # --- Mailgun (alert e-mails) ---
+    MAILGUN_API_BASE_URL: str = "https://api.mailgun.net/v3"
+    MAILGUN_DOMAIN: str | None = None
+    MAILGUN_API_KEY: str | None = None
+    MAILGUN_FROM_EMAIL: str | None = None
+    MAILGUN_FROM_NAME: str | None = "Tiai"
+    MAILGUN_TIMEOUT_SECONDS: int = 10
+    ALERT_RECIPIENTS: Annotated[list[str] | str, BeforeValidator(parse_list)] = []
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def alerts_enabled(self) -> bool:
+        """Whether Mailgun is configured."""
+        return bool(self.MAILGUN_DOMAIN and self.MAILGUN_API_KEY)
+
+    # --- Defender freshness policy ---
+    # A machine is "up to date" if signatures are younger than this many days.
+    SIGNATURE_MAX_AGE_DAYS: int = 3
+    # A machine is considered inactive after this many days without heartbeat.
+    INACTIVE_AFTER_DAYS: int = 30
+
+
+settings = Settings()

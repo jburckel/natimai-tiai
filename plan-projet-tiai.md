@@ -9,7 +9,7 @@
 
 ## 1. Vision & périmètre
 
-Construire un agent léger déployé par GPO sur les postes Windows, un backend central qui collecte l'état des postes et orchestre des actions, et une console web de supervision.
+Construire un agent léger déployé par GPO sur les postes Windows, un backend central qui collecte l'état des postes et orchestre des actions, et une console web de supervision. Le produit est pensé **générique et réutilisable sur d'autres parcs** : rien de spécifique à un réseau dans le code, tout le déploiement-spécifique passe par la configuration (cf. §2.12).
 
 | Module | Priorité | Horizon |
 |---|---|---|
@@ -22,57 +22,70 @@ Tout le projet est pensé pour que l'ajout des modules suivants réutilise **le 
 
 ---
 
-## 2. Remarques & ajustements proposés
+## 2. Décisions structurantes
 
-Synthèse des décisions structurantes. Le détail technique est repris dans les sections suivantes.
+Synthèse des décisions techniques structurantes. Le détail est repris dans les sections suivantes.
 
-### 2.1 — Modèle de communication : *polling* plutôt que *push* ✅ changement recommandé
+### 2.1 — Modèle de communication : polling
 
-Tu décris « envoyer les demandes de scan aux clients », ce qui suppose que le serveur ouvre une connexion vers chaque poste. C'est fragile : NAT, pare-feu, postes portables hors réseau, postes éteints. **Recommandation : inverser le sens.** L'agent interroge le serveur à intervalle régulier (*polling*) :
+La communication agent↔serveur est de type **polling** : l'agent interroge le serveur à intervalle régulier ; le serveur ne se connecte jamais aux postes.
 
 1. l'agent appelle le serveur (heartbeat) → remonte son état Defender ;
 2. **la même réponse** lui renvoie les commandes en attente (scan rapide / complet / update) ;
 3. l'agent exécute, puis poste le résultat.
 
-Le serveur ne « pousse » jamais : il **met des commandes en file**, les agents les récupèrent. Avantages : traverse NAT/pare-feu sans configuration, gère naturellement les postes hors-ligne, et 1000 postes deviennent une charge triviale.
+Le serveur met les commandes en file ; les agents les récupèrent. Ce modèle traverse NAT et pare-feu sans configuration et gère naturellement les postes hors-ligne.
 
-> **Latence** : une action « lancer un scan sur tous les postes » s'applique à chaque poste lors de son prochain *poll*. Prévoir deux intervalles : un long pour la remontée d'état (ex. 15 min) et un court pour la récupération de commandes (ex. 1 min). Si du quasi-temps-réel est nécessaire plus tard → SSE ou WebSocket en option.
+Deux intervalles : un long pour la remontée d'état (ex. 15 min) et un court pour la récupération de commandes (ex. 1 min). Une action « lancer un scan sur tous les postes » s'applique à chaque poste lors de son prochain *poll*. Si du quasi-temps-réel devient nécessaire → SSE ou WebSocket en option.
 
-### 2.2 — « 1000 connexions » : à requalifier
+### 2.2 — Dimensionnement
 
-En modèle *polling*, il n'y a **pas** 1000 connexions persistantes mais de brèves requêtes étalées dans le temps : ~1 à 3 req/s en moyenne pour 1000 postes. Un seul conteneur backend + un *worker* suffisent largement. **Inutile de sur-dimensionner** (pas de Kafka, pas de cluster). Le seul point d'attention est le pool de connexions PostgreSQL (asyncpg) bien réglé.
+Un seul conteneur backend + un **worker** suffisent pour l'instant. Pas de Kafka, pas de cluster : les requêtes sont brèves et étalées dans le temps (~1 à 3 req/s pour 1000 postes), le volume ne le justifie pas. Le seul point d'attention est le réglage du pool de connexions PostgreSQL (asyncpg).
 
-### 2.3 — Identité stable des postes ✅ point critique
+### 2.3 — Identité stable des postes & empreinte
 
-Le nom de poste et le domaine peuvent changer (renommage, migration). Identifier un poste par son `hostname` casserait l'historique et créerait des doublons. **Recommandation : un identifiant stable** :
-- soit le `MachineGuid` de Windows (`HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`),
-- soit un UUID généré au premier démarrage et persisté localement.
+On **sépare** deux besoins : l'**identité** (clé stable pour retrouver le poste) et l'**empreinte** (jeu d'attributs pour détecter un changement). Le `MachineGuid` est écarté comme identité : sur des postes **clonés/ré-imagés sans Sysprep `/generalize`**, il est **dupliqué** (collision sur la clé unique, partage de token).
 
-Le `hostname` et le `domain` deviennent de simples **attributs** rattachés à cet identifiant.
+**Identité (`machine_uuid`)**, résolue par l'agent dans cet ordre :
+1. **SMBIOS / System UUID** (`Win32_ComputerSystemProduct.UUID`) — unique par carte mère, stable au renommage, au changement de domaine **et** à une ré-image de l'OS. Ancre principale pour le parc physique. Validé contre une **denylist** (nul `0000…`, `FFFF…`, constantes OEM dupliquées connues).
+2. **Repli** si SMBIOS invalide/absent : UUID **généré par l'agent** au 1er run et persisté (`HKLM\SOFTWARE\Tiai`, ACL `SYSTEM`).
+3. **TPM 2.0 (EK public)** : ancre la plus robuste si le parc en dispose ; ici lu en **bonus d'empreinte** (parc mixte, on n'en dépend pas).
 
-### 2.4 — Authentification : auto-enrôlement + token par poste ✅ ajustement
+**Empreinte** = composants stockés **séparément, jamais hashés** (`machine_guid`, `smbios_uuid`, `tpm_ek_hash`, `hostname`, `domain`). À chaque enrôlement/heartbeat, le serveur **diffe** avec des règles par attribut :
 
-Une clé partagée unique en variable d'environnement contrôle tout le parc : si **un** poste la fuite, n'importe qui peut usurper **n'importe quel** poste et déclencher des scans partout. On garde l'enrôlement automatique (zéro validation manuelle) **tout en** passant à un token par poste. Deux secrets distincts :
+| Constat | Lecture | Action |
+|---|---|---|
+| hostname/domaine/MachineGuid changent, ancre identique | renommage / ré-image bénigne | maj silencieuse |
+| `smbios_uuid` ou `tpm_ek_hash` changent | swap matériel / clone / vol de token | **`needs_verification`** |
+| même `smbios_uuid` sous un **autre** `machine_uuid` actif | ré-image du même poste ou clone | flag + fusion manuelle (§8) |
+
+> Un **hash** des identifiants serait un mauvais choix : il change dès qu'un seul composant bouge (donc instable comme clé) et ne dit jamais **lequel** a changé (un renommage bénin déclencherait « à vérifier »). Stocker les composants permet la décision fine.
+
+Le `hostname` et le `domain` restent de simples **attributs**. La collision clone est aussi évitée en pratique en installant l'agent **après** déploiement (GPO sur poste individualisé).
+
+### 2.4 — Authentification : auto-enrôlement + token par poste
+
+Enrôlement automatique (zéro validation manuelle) avec un **token unique par poste** — et non une clé partagée unique, dont la fuite permettrait d'usurper n'importe quel poste. Deux secrets distincts :
 
 - un **secret d'enrôlement** partagé, déployé par GPO (registre ACL `SYSTEM` ou DPAPI), qui ne sert **qu'à** s'enregistrer ;
 - un **token unique par poste**, émis automatiquement au premier contact.
 
 Flux (*trust on first use*) :
-1. Au 1er démarrage, l'agent lit son UUID stable, puis appelle `POST /enroll` avec l'en-tête `X-Enrollment-Secret`.
+1. Au 1er démarrage, l'agent **résout son identité** (SMBIOS UUID validé, sinon UUID agent persisté) et son empreinte, puis appelle `POST /enroll` avec l'en-tête `X-Enrollment-Secret`.
 2. Le serveur valide le secret, crée le poste, génère un token aléatoire fort, en stocke **seulement le hash**, et renvoie le token **une seule fois**.
 3. L'agent stocke le token chiffré (DPAPI) ; tous les appels suivants utilisent `Authorization: Bearer <token>`. Le secret d'enrôlement ne resservira plus.
 
-Le secret partagé n'autorise que l'*enrôlement*, jamais le *contrôle* : une fuite permet au pire de créer de faux postes (bruit détectable), pas d'usurper un poste réel ni de lancer un scan. **Garde-fous** : signaler/auditer tout ré-enrôlement d'un `machine_uuid` connu (poste réinstallé vs vol de token) ; bouton de **révocation** de token côté console (force un ré-enrôlement). Implémenté dès **M1/M2**, pas reporté au durcissement.
+Le secret partagé n'autorise que l'*enrôlement*, jamais le *contrôle* : une fuite permet au pire de créer de faux postes (bruit détectable), pas d'usurper un poste réel ni de lancer un scan. **Garde-fous** : auditer tout ré-enrôlement d'un `machine_uuid` connu (poste réinstallé vs vol de token) ; bouton de **révocation** de token côté console (force un ré-enrôlement). Implémenté dès **M1/M2**.
 
-### 2.5 — TLS : dès le départ, via **Caddy** + AC interne ✅ décidé
+### 2.5 — TLS dès le départ via Caddy + AC interne
 
-Envoyer le token d'authentification en HTTP clair, c'est l'exposer. On met donc le TLS **dès le MVP**, sans complexité : un service **Caddy** en frontal (reverse-proxy) termine le TLS et sert backend + frontend. Pas besoin de Traefik (utile surtout pour du routage dynamique multi-services).
+Le TLS est en place **dès le MVP** : un service **Caddy** en frontal (reverse-proxy) termine le TLS et sert backend + frontend. Pas de Traefik (utile surtout pour du routage dynamique multi-services).
 
-Le certificat : un certificat serveur émis par l'**AC interne** de l'entreprise (AD CS) pour le nom du serveur (ex. `tiai.natimai.local`). Les postes du domaine font **déjà confiance** à cette AC racine → aucun avertissement. Bonus : le client HTTP de Go sous Windows utilise le **magasin système**, donc le certificat AC interne est validé sans config côté agent. À défaut d'AD CS : certificat auto-signé + racine poussée par GPO. Let's Encrypt seulement si le serveur a un nom DNS public (rare en interne).
+Le certificat serveur est émis par l'**AC interne** (AD CS) pour le nom du serveur (ex. `tiai.natimai.local`). Les postes du domaine font **déjà confiance** à cette AC racine → aucun avertissement, et le client HTTP de Go sous Windows utilise le **magasin système** (validation sans config côté agent). À défaut d'AD CS : certificat auto-signé + racine poussée par GPO. Let's Encrypt seulement si le serveur a un nom DNS public (rare en interne).
 
-### 2.6 — Accès à Defender : WMI plutôt que shell PowerShell
+### 2.6 — Accès à Defender via WMI
 
-Plutôt que de lancer un processus `powershell.exe Get-MpComputerStatus` à chaque cycle (coûteux, fragile), interroger directement **WMI** dans l'espace de noms `ROOT\Microsoft\Windows\Defender` :
+L'agent interroge directement **WMI** dans l'espace de noms `ROOT\Microsoft\Windows\Defender`, plutôt que de lancer un processus `powershell.exe` à chaque cycle (coûteux, fragile) :
 
 | Donnée | Source WMI | Équivalent PowerShell |
 |---|---|---|
@@ -81,15 +94,15 @@ Plutôt que de lancer un processus `powershell.exe Get-MpComputerStatus` à chaq
 | Lancer un scan | méthode `Start` de `MSFT_MpScan` | `Start-MpScan -ScanType Quick/Full` |
 | MAJ signatures | méthode `Update` de `MSFT_MpSignature` | `Update-MpSignature` |
 
-En Go : `github.com/yusufpapurcu/wmi` (+ `go-ole`). Garder le repli PowerShell pour les opérations non exposées en WMI.
+En Go : `github.com/yusufpapurcu/wmi` (+ `go-ole`). Repli PowerShell pour les opérations non exposées en WMI.
 
 ### 2.7 — Déduplication des menaces
 
 Chaque détection Defender porte un `DetectionID` unique. **Contrainte d'unicité `(machine_id, detection_id)`** en base + `INSERT ... ON CONFLICT DO NOTHING` (upsert) → aucun doublon, même si l'agent remonte plusieurs fois la même menace.
 
-### 2.8 — Expiration des commandes ✅ à ne pas oublier
+### 2.8 — Expiration des commandes
 
-Un portable éteint 3 semaines ne doit pas, à son retour, déclencher un scan complet demandé il y a 20 jours. **Chaque commande porte un `expires_at`** ; passé ce délai, elle est marquée `expired` et n'est plus distribuée.
+**Chaque commande porte un `expires_at`** ; passé ce délai, elle est marquée `expired` et n'est plus distribuée. Ainsi un portable éteint 3 semaines ne déclenche pas, à son retour, un scan demandé 20 jours plus tôt.
 
 ### 2.9 — Robustesse de l'agent
 
@@ -100,11 +113,28 @@ Un portable éteint 3 semaines ne doit pas, à son retour, déclencher un scan c
 
 ### 2.10 — Configuration : fichier **et** registre
 
-GPO sait déployer les deux. Recommandation : fichier `C:\ProgramData\Tiai\config.yaml` comme source principale, **surchargé** par des clés de registre si présentes (utile pour pousser un réglage ponctuel par GPO sans réécrire le fichier). La clé sensible : idéalement via registre/DPAPI plutôt qu'en clair dans le YAML.
+Source principale : fichier `C:\ProgramData\Tiai\config.yaml`, **surchargé** par des clés de registre si présentes (GPO sait déployer les deux ; utile pour pousser un réglage ponctuel sans réécrire le fichier). La clé sensible passe par registre/DPAPI plutôt qu'en clair dans le YAML.
 
 ### 2.11 — Impact sur la stack
 
 L'usage d'**ARQ implique Redis**. La stack docker-compose côté serveur devient donc : PostgreSQL + Redis + backend + worker + frontend + **Caddy** (reverse-proxy + TLS). **Les agents Windows ne sont pas dans Docker** (ils tournent sur les postes).
+
+### 2.12 — Produit réutilisable (multi-parc) & TLS optionnel
+
+L'outil doit pouvoir être **réutilisé sur d'autres parcs** : rien d'absolument spécifique au réseau Natimai dans le code. Tout ce qui est propre à un déploiement (nom de serveur, domaine, secret d'enrôlement, identifiants Mailgun, recipients) passe par la **configuration / variables d'environnement**, jamais en dur.
+
+Le **TLS/les certificats ne sont pas une dépendance dure** de l'agent ni du backend :
+- le **backend** parle HTTP en interne (le TLS est terminé par Caddy en frontal) ; il fonctionne sans certificat ;
+- l'**agent** utilise le client HTTP de Go (magasin système) ; il peut viser une URL `http://` pour les tests, sans certificat ;
+- pour un déploiement HTTPS **sans certificat fourni**, Caddy peut générer un certificat local auto-signé (`tls internal`) ; en prod on bascule sur le certificat de l'AC interne.
+
+Objectif : on peut lever la stack et lancer l'agent **sans gérer de certificat** (dev/tests), puis activer le TLS « AC interne » en production par simple configuration.
+
+### 2.13 — Tests
+
+Le **backend** et le **frontend** font l'objet de tests, écrits **au fil de l'eau** sur les fonctionnalités existantes (pas reportés en fin de projet) :
+- backend : `pytest` — tests unitaires sans base (sécurité/tokens, permissions, empreinte) + tests d'API sur base PostgreSQL de test (`TIAI_TEST_DATABASE_URL`, *skippés* sinon) ;
+- frontend : `vitest` — services et composants.
 
 ---
 
@@ -151,7 +181,12 @@ L'usage d'**ARQ implique Redis**. La stack docker-compose côté serveur devient
 ```text
 machines
   id                uuid    PK (généré serveur)
-  machine_uuid      text    UNIQUE   -- identité stable (MachineGuid/UUID agent)
+  machine_uuid      text    UNIQUE   -- identité stable (SMBIOS UUID validé, sinon UUID agent)
+  -- empreinte (composants séparés, non hashés) pour détecter clone/altération
+  machine_guid      text             -- MachineGuid Windows (dupliqué sur clones sans Sysprep)
+  smbios_uuid       text             -- Win32_ComputerSystemProduct.UUID (ancre)
+  tpm_ek_hash       text             -- hash de l'EK TPM 2.0, si présent
+  needs_verification bool            -- empreinte divergente → à vérifier (admin)
   hostname          text             -- attribut, peut changer
   domain            text
   os_version        text
@@ -168,7 +203,7 @@ machines
   first_seen        timestamptz
   last_seen         timestamptz       -- = date de dernière connexion (UI)
   created_at, updated_at timestamptz
-  INDEX (hostname), (domain), (last_seen), (is_up_to_date)
+  INDEX (hostname), (domain), (last_seen), (is_up_to_date), (needs_verification), (smbios_uuid)
 
 threats
   id              bigserial PK
@@ -213,10 +248,12 @@ commands               -- file de commandes (une ligne par poste, même en broad
 | `POST` | `/api/v1/agent/heartbeat` | Remonte l'état Defender + menaces. **Renvoie les commandes en attente.** |
 | `POST` | `/api/v1/agent/commands/{id}/result` | Résultat d'exécution d'une commande. |
 
-**Côté console** (auth : session/JWT plus tard ; MVP simplifié)
+**Côté console** (auth : **JWT utilisateur**, email + mot de passe)
 
 | Méthode | Endpoint | Rôle |
 |---|---|---|
+| `POST` | `/api/v1/auth/login` | Email + mot de passe (OAuth2 password) → JWT. |
+| `GET` | `/api/v1/auth/me` | Utilisateur courant. |
 | `GET` | `/api/v1/machines?search=&domain=&status=&page=` | Liste filtrable/paginée. |
 | `GET` | `/api/v1/machines/{id}` | Détail d'un poste + menaces. |
 | `GET` | `/api/v1/stats/overview` | KPIs dashboard. |
@@ -251,7 +288,7 @@ commands               -- file de commandes (une ligne par poste, même en broad
 - Lecture complète de l'état (signatures, RTP, dates de scans) + remontée des menaces (`MSFT_MpThreatDetection`) avec `detection_id`.
 - Récupération + exécution des commandes : `quick_scan`, `full_scan`, `update_signatures`.
 - Remontée du résultat d'exécution.
-- Config YAML + surcharge registre ; identité stable (`MachineGuid`/UUID).
+- Config YAML + surcharge registre ; identité stable (`MachineGuid`).
 - File locale + back-off si serveur injoignable.
 - **DoD** : depuis un appel API, on déclenche un scan/MAJ sur un poste réel et le résultat remonte.
 
@@ -274,7 +311,7 @@ commands               -- file de commandes (une ligne par poste, même en broad
 ### M5 — Durcissement *(4–6 j)*
 - *(TLS et token par poste sont déjà en place depuis M0–M1.)*
 - Authentification de la console (login admin / JWT) + **journal d'audit** (qui a lancé quel scan).
-- **ARQ** : job de nettoyage (postes inactifs depuis X mois → archivage/suppression) + notification des alertes (e-mail SMTP ou webhook Teams/Slack).
+- **ARQ** : job de nettoyage (postes inactifs depuis X mois → archivage/suppression) + notification des alertes **par e-mail (API Mailgun)**.
 - Rotation des tokens + limitation de débit côté API.
 - **DoD** : console authentifiée, alertes envoyées automatiquement, actions tracées.
 
@@ -298,13 +335,67 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 
 ---
 
+## Suivi d'avancement
+
+> Coché = fait. Mis à jour au fil du travail.
+
+**M0 — Fondations**
+- [x] Mono-repo `/agent` `/backend` `/frontend` `/deploy`
+- [x] Squelette `docker-compose` (db, redis, backend, worker, frontend, caddy)
+- [x] Migrations Alembic (machines, threats, commands + users + empreinte)
+- [x] Caddy + TLS (Caddyfile ; `tls internal` possible pour dev)
+- [x] `/health` + versionnement `/api/v1`
+- [ ] `docker compose up` validé de bout en bout (à exécuter sur machine Docker)
+- [ ] Certificat de signature de code préparé (chaîne de build)
+
+**M1 — Tranche verticale**
+- [x] Backend `enroll` (valide le secret, émet le token par poste)
+- [x] Backend `heartbeat` (upsert machine, `last_seen`, auth token, renvoi des commandes)
+- [x] Résolution d'identité (SMBIOS UUID validé / repli UUID agent) + empreinte
+- [x] Agent : boucle de polling + client HTTP (squelette buildable)
+- [x] Frontend : page liste des postes
+- [ ] Agent : service Windows + lecture WMI `MSFT_MpComputerStatus` (port depuis natimai-windows-console)
+- [ ] Agent : stockage chiffré du token (DPAPI)
+
+**M2 — Agent Defender complet** · ⬜ à faire
+- [ ] Lecture complète état + remontée menaces (`detection_id`)
+- [ ] Exécution `quick_scan` / `full_scan` / `update_signatures` + remontée résultat
+- [ ] Config YAML + surcharge registre ; file locale + back-off
+
+**M3 — Backend complet** · 🟡 partiel
+- [x] File de commandes : création (route `POST /commands`, permission `command:execute`)
+- [x] Garde-fou d'empreinte `needs_verification` (enroll + heartbeat)
+- [ ] Déduplication menaces (contrainte + upsert)
+- [ ] Création **groupée** par filtre, transitions d'état complètes
+- [ ] Stats (`/stats/overview`), recherche/filtrage avancés, révocation de token (API)
+
+**M4 — Console** · 🟡 partiel
+- [x] Liste des postes (squelette)
+- [ ] Dashboard KPI, vue détail poste, actions de masse, fusion de postes (`needs_verification`)
+
+**M5 — Durcissement** · 🟡 partiel (anticipé)
+- [x] Auth console JWT + rôles `admin` / `readonly` (permissions `(ressource, action)`)
+- [x] Provider d'alerte e-mail (Mailgun)
+- [ ] Journal d'audit ; jobs ARQ branchés (nettoyage + envoi d'alertes) ; rotation tokens ; rate-limiting
+
+**M6 — Packaging & GPO** · ⬜ à faire
+
+**Transverse**
+- [x] Tests backend (`pytest` : sécurité, permissions, empreinte ; API sur Postgres de test)
+- [x] Tests frontend (`vitest` : service machines)
+- [x] Qualité backend : `ruff format` + `ruff check` + `mypy --strict` (verts)
+- [x] Formatage frontend : `prettier`
+- [x] CI GitHub Actions (backend : uv + ruff + mypy + pytest avec Postgres ; frontend : prettier + vitest)
+
+---
+
 ## 7. Sécurité — feuille de route
 
 | Étape | Mesure |
 |---|---|
-| MVP (M0–M1) | **TLS dès le départ** (Caddy + AC interne) ; **auto-enrôlement** : secret d'enrôlement partagé → **token unique par poste** (DPAPI) ; identité = `machine_uuid`. |
-| Durcissement (M5) | Auth console (JWT) ; garde-fou de ré-enrôlement + révocation de token ; journal d'audit ; moindre privilège + limitation de débit sur l'API. |
-| Plus tard | Rotation automatique des tokens ; mTLS ; attestation d'identité AD à l'enrôlement ; RBAC console. |
+| MVP (M0–M1) | **TLS dès le départ** (Caddy + AC interne) ; **auto-enrôlement** : secret d'enrôlement partagé → **token unique par poste** (DPAPI) ; identité = `machine_uuid` ; **auth console JWT** avec rôles `admin` / `readonly`. |
+| Durcissement (M5) | Garde-fou de ré-enrôlement + révocation de token ; journal d'audit ; moindre privilège + limitation de débit sur l'API. |
+| Plus tard | Rotation automatique des tokens ; mTLS ; attestation d'identité AD à l'enrôlement ; **permissions fines par ressource/table** (lecture/écriture) au-delà des deux rôles. |
 
 Points permanents : binaire agent **signé**, validation stricte des entrées API, limitation de débit côté agent pour éviter l'effet « troupeau ».
 
@@ -312,10 +403,11 @@ Points permanents : binaire agent **signé**, validation stricte des entrées AP
 
 ## 8. Risques & points d'attention
 
-- **Postes portables hors réseau** : le modèle *polling* gère bien le cas, mais si le serveur doit être atteignable depuis Internet/VPN, prévoir l'exposition sécurisée (reverse-proxy, IP filtrée, VPN).
+- **Serveur interne uniquement** : pas d'exposition Internet/VPN à ce jour ; un poste hors du réseau d'entreprise ne remonte pas tant qu'il n'y est pas reconnecté (le modèle *polling* le gère sans perte de données). Si une exposition externe devient nécessaire plus tard, prévoir un accès sécurisé (reverse-proxy, IP filtrée, VPN).
+- **Postes en workgroup** : hors domaine, la GPO n'est pas disponible → déploiement de l'agent par script/MSI et installation manuelle de la racine AC interne et du secret d'enrôlement.
 - **Droits de l'agent** : `LocalSystem` est puissant ; le binaire signé et la chaîne de déploiement deviennent une cible de choix → soigner la sécurité de la build.
 - **Cohérence des dates Defender** : certaines propriétés WMI valent `0`/`null` si aucun scan n'a eu lieu — gérer ces cas dans le calcul de `is_up_to_date`.
-- **Faux doublons** : un poste réinstallé reçoit parfois un nouveau `MachineGuid` → prévoir une réconciliation manuelle dans l'UI (fusion de postes).
+- **Clones / faux doublons** : l'ancre **SMBIOS UUID** survit à une ré-image (même identité conservée) et distingue les clones non-sysprepés (cf. §2.3). Cas résiduels signalés par `needs_verification` → réconciliation manuelle / **fusion de postes** dans l'UI : swap de carte mère (nouvelle ancre), SMBIOS invalide tombant sur le repli UUID agent, ou clonage préservant le SMBIOS.
 - **Effet de masse** : « scan complet sur tout le parc » peut saturer postes et réseau → permettre l'étalement (les commandes sont récupérées au *poll*, ce qui étale naturellement, mais documenter le comportement).
 
 ---
@@ -324,18 +416,18 @@ Points permanents : binaire agent **signé**, validation stricte des entrées AP
 
 | Couche | Choix | Note |
 |---|---|---|
-| Agent | **Go** | Binaire statique unique, idéal GPO, faible empreinte, bon support service Windows (`golang.org/x/sys/windows/svc` ou `kardianos/service`), WMI via `yusufpapurcu/wmi`. **Alternative** : C#/.NET — intégration Windows native plus riche et packaging MSI/signature plus simple, mais runtime à gérer. Go reste mon choix par défaut ici. |
-| Backend | **FastAPI** (async) + asyncpg/SQLAlchemy | Conforme à ton choix. |
-| Base | **PostgreSQL** | Conforme. |
-| File de tâches | **ARQ** + **Redis** | Nettoyage + alertes. Redis ajouté à la stack. |
-| Frontend | **Quasar / Vue 3** | Conforme. |
+| Agent | **Go** | Binaire statique unique, idéal GPO, faible empreinte, bon support service Windows (`golang.org/x/sys/windows/svc` ou `kardianos/service`), WMI via `yusufpapurcu/wmi`. Alternative écartée : C#/.NET — intégration Windows plus riche et packaging/signature plus simples, mais runtime à gérer. |
+| Backend | **FastAPI** (async) + asyncpg/SQLAlchemy | API REST versionnée (`/api/v1`). |
+| Base | **PostgreSQL** | Stockage en UTC (`timestamptz`). |
+| File de tâches | **ARQ** + **Redis** | Nettoyage + alertes. |
+| Alertes | **e-mail via API Mailgun** | Notifications envoyées par le worker ARQ. |
+| Frontend | **Quasar / Vue 3** | Build statique servi par nginx. |
 | Infra | docker-compose + **Caddy** (reverse-proxy + TLS) | TLS **dès le départ**, certificat de l'AC interne (déjà approuvée par les postes du domaine). Traefik inutile ici. |
 
 ---
 
-## Questions ouvertes (pour affiner le plan)
+## 10. Cadrage retenu
 
-1. Les postes portables sortent-ils du réseau d'entreprise (besoin d'un serveur joignable via VPN/Internet) ?
-2. Quelle taille d'équipe sur le projet (pour caler les estimations) ?
-3. Environnement 100 % AD/domaine, ou postes en workgroup à prévoir ?
-4. Canal d'alerte souhaité : e-mail, Teams, Slack, autre ?
+- **Réseau** : serveur joignable **uniquement en interne** (LAN). Pas de VPN ni d'exposition Internet prévus à ce jour.
+- **Environnement** : parc **mixte** — postes en domaine AD **et** postes en workgroup. Le déploiement par GPO couvre les postes du domaine ; les postes en workgroup sont provisionnés par script/MSI (agent, racine AC interne, secret d'enrôlement).
+- **Canal d'alerte** : **e-mail** via l'**API Mailgun** (premier canal ; d'autres canaux non prévus pour l'instant).

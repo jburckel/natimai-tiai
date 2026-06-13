@@ -1,0 +1,236 @@
+"""Agent-facing endpoints: enroll, heartbeat (+ command pickup), command result."""
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlmodel import select
+
+from app.api.deps import CurrentMachine, SessionDep, verify_enrollment_secret
+from app.core import security
+from app.features.base import utcnow
+from app.features.command.models import Command, CommandStatus
+from app.features.machine import fingerprint
+from app.features.machine.models import Machine
+
+router = APIRouter(prefix="/agent", tags=["agent"])
+
+
+# --- Schemas ---------------------------------------------------------------
+
+
+class Fingerprint(BaseModel):
+    """Identity fingerprint components reported by the agent."""
+
+    machine_guid: str | None = None
+    smbios_uuid: str | None = None
+    tpm_ek_hash: str | None = None
+
+
+class EnrollRequest(BaseModel):
+    """First-contact payload (authenticated by X-Enrollment-Secret header)."""
+
+    machine_uuid: str
+    hostname: str | None = None
+    domain: str | None = None
+    os_version: str | None = None
+    agent_version: str | None = None
+    fingerprint: Fingerprint | None = None
+
+
+class EnrollResponse(BaseModel):
+    """Returned once: the per-machine bearer token."""
+
+    machine_id: uuid.UUID
+    token: str
+
+
+class DefenderState(BaseModel):
+    """Defender status reported on each heartbeat."""
+
+    rtp_enabled: bool | None = None
+    av_enabled: bool | None = None
+    signature_version: str | None = None
+    signature_last_updated: datetime | None = None
+    signature_age_days: int | None = None
+    last_quick_scan: datetime | None = None
+    last_full_scan: datetime | None = None
+
+
+class HeartbeatRequest(BaseModel):
+    """State report; threats reported separately as a list of raw dicts."""
+
+    hostname: str | None = None
+    domain: str | None = None
+    os_version: str | None = None
+    agent_version: str | None = None
+    defender: DefenderState | None = None
+    fingerprint: Fingerprint | None = None
+    threats: list[dict[str, Any]] = []
+
+
+class CommandOut(BaseModel):
+    """A pending command handed to the agent."""
+
+    id: uuid.UUID
+    type: str
+
+
+class HeartbeatResponse(BaseModel):
+    """Heartbeat ack carrying the machine's pending commands."""
+
+    commands: list[CommandOut]
+
+
+class CommandResult(BaseModel):
+    """Execution result posted back by the agent."""
+
+    status: CommandStatus
+    output: str | None = None
+    error: str | None = None
+
+
+# --- Routes ----------------------------------------------------------------
+
+
+@router.post(
+    "/enroll",
+    response_model=EnrollResponse,
+    dependencies=[Depends(verify_enrollment_secret)],
+)
+async def enroll(payload: EnrollRequest, session: SessionDep) -> EnrollResponse:
+    """Register a machine (trust on first use) and emit its token once.
+
+    Idempotent on machine_uuid: re-enrollment rotates the token. A known
+    machine_uuid re-enrolling is a guard-rail signal (reinstall vs token theft).
+    """
+    result = await session.execute(
+        select(Machine).where(Machine.machine_uuid == payload.machine_uuid)
+    )
+    machine = result.scalar_one_or_none()
+    fp = payload.fingerprint or Fingerprint()
+
+    token = security.generate_token()
+    suspicious = False
+    if machine is None:
+        machine = Machine(machine_uuid=payload.machine_uuid)
+        session.add(machine)
+    else:
+        # Re-enrollment of a known identity: a changed hardware anchor is a
+        # guard-rail signal (reinstall vs token theft / clone).
+        suspicious = fingerprint.is_suspicious_change(
+            machine, smbios_uuid=fp.smbios_uuid, tpm_ek_hash=fp.tpm_ek_hash
+        )
+
+    # Another active identity sharing the same SMBIOS anchor → re-image of the
+    # same physical box or a clone → flag for manual reconciliation (merge).
+    if fp.smbios_uuid:
+        other = await session.execute(
+            select(Machine.id)
+            .where(Machine.smbios_uuid == fp.smbios_uuid)
+            .where(Machine.machine_uuid != payload.machine_uuid)
+        )
+        if other.first() is not None:
+            suspicious = True
+
+    machine.hostname = payload.hostname
+    machine.domain = payload.domain
+    machine.os_version = payload.os_version
+    machine.agent_version = payload.agent_version
+    fingerprint.store_fingerprint(
+        machine,
+        machine_guid=fp.machine_guid,
+        smbios_uuid=fp.smbios_uuid,
+        tpm_ek_hash=fp.tpm_ek_hash,
+    )
+    if suspicious:
+        machine.needs_verification = True
+    machine.token_hash = security.hash_token(token)
+    machine.token_revoked = False
+    machine.updated_at = utcnow()
+
+    await session.commit()
+    await session.refresh(machine)
+    return EnrollResponse(machine_id=machine.id, token=token)
+
+
+@router.post("/heartbeat", response_model=HeartbeatResponse)
+async def heartbeat(
+    payload: HeartbeatRequest, machine: CurrentMachine, session: SessionDep
+) -> HeartbeatResponse:
+    """Upsert Defender state, then return this machine's pending commands."""
+    if payload.hostname is not None:
+        machine.hostname = payload.hostname
+    if payload.domain is not None:
+        machine.domain = payload.domain
+    if payload.os_version is not None:
+        machine.os_version = payload.os_version
+    if payload.agent_version is not None:
+        machine.agent_version = payload.agent_version
+
+    if payload.defender is not None:
+        d = payload.defender
+        machine.rtp_enabled = d.rtp_enabled
+        machine.av_enabled = d.av_enabled
+        machine.signature_version = d.signature_version
+        machine.signature_last_updated = d.signature_last_updated
+        machine.signature_age_days = d.signature_age_days
+        machine.last_quick_scan = d.last_quick_scan
+        machine.last_full_scan = d.last_full_scan
+        # TODO(M3): compute is_up_to_date from age + RTP.
+
+    if payload.fingerprint is not None:
+        fp = payload.fingerprint
+        if fingerprint.is_suspicious_change(
+            machine, smbios_uuid=fp.smbios_uuid, tpm_ek_hash=fp.tpm_ek_hash
+        ):
+            machine.needs_verification = True
+        fingerprint.store_fingerprint(
+            machine,
+            machine_guid=fp.machine_guid,
+            smbios_uuid=fp.smbios_uuid,
+            tpm_ek_hash=fp.tpm_ek_hash,
+        )
+
+    machine.last_seen = utcnow()
+    machine.updated_at = utcnow()
+
+    # TODO(M2): dedup-insert payload.threats (ON CONFLICT DO NOTHING).
+
+    rows = await session.execute(
+        select(Command)
+        .where(Command.machine_id == machine.id)
+        .where(Command.status == CommandStatus.PENDING)
+        .where(Command.expires_at > utcnow())
+    )
+    pending = rows.scalars().all()
+    for cmd in pending:
+        cmd.status = CommandStatus.DELIVERED
+        cmd.delivered_at = utcnow()
+
+    await session.commit()
+    return HeartbeatResponse(
+        commands=[CommandOut(id=c.id, type=c.type) for c in pending]
+    )
+
+
+@router.post("/commands/{command_id}/result")
+async def command_result(
+    command_id: uuid.UUID,
+    payload: CommandResult,
+    machine: CurrentMachine,
+    session: SessionDep,
+) -> dict[str, str]:
+    """Record the result of a command executed by the agent."""
+    cmd = await session.get(Command, command_id)
+    if cmd is None or cmd.machine_id != machine.id:
+        return {"status": "ignored"}
+
+    cmd.status = payload.status
+    cmd.result_output = payload.output
+    cmd.error = payload.error
+    cmd.finished_at = utcnow()
+    await session.commit()
+    return {"status": "ok"}

@@ -1,0 +1,7 @@
+node_modules
+dist
+.quasar
+src-capacitor
+src-cordova
+.vscode
+package-lock.json

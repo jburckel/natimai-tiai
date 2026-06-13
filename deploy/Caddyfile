@@ -1,0 +1,31 @@
+# Caddy — reverse-proxy + terminaison TLS pour Tiai.
+#
+# Le certificat serveur est émis par l'AC interne (AD CS) pour le nom du
+# serveur. Les postes du domaine font déjà confiance à cette AC racine.
+# Place le certificat et sa clé dans deploy/certs/ (montés en lecture seule).
+#
+# Sans certificat fourni (dev / tests), remplace la ligne `tls` par :
+#     tls internal
+# → Caddy génère un certificat local auto-signé, aucune dépendance à un certif.
+# (Pour des tests en HTTP pur, on peut aussi viser directement le backend:8000
+#  sans passer par Caddy — cf. §2.12 : le TLS n'est pas une dépendance dure.)
+
+{$TIAI_SERVER_NAME:tiai.natimai.local} {
+	tls /etc/caddy/certs/tiai.crt /etc/caddy/certs/tiai.key
+
+	# API backend
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle /health {
+		reverse_proxy backend:8000
+	}
+
+	# Console (build Quasar servi par nginx)
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	encode gzip
+}

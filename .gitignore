@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.local
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# Node / Quasar
+node_modules/
+frontend/dist/
+frontend/.quasar/
+*.log
+
+# Go
+agent/*.exe
+agent/bin/
+agent/dist/
+
+# Deploy secrets / TLS material
+deploy/.env
+deploy/certs/
+deploy/caddy_data/
+deploy/caddy_config/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
