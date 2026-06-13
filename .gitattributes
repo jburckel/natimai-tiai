@@ -1,0 +1,24 @@
+# Normalize line endings: store LF in the repo and check out LF on every
+# platform. Critical for shell scripts that run inside Linux containers
+# (CRLF would break the interpreter line).
+* text=auto eol=lf
+
+# Explicitly LF for container-executed / config files.
+*.sh         text eol=lf
+Dockerfile   text eol=lf
+*.py         text eol=lf
+*.go         text eol=lf
+
+# Lockfiles: text, keep diffs but never CRLF.
+uv.lock           text eol=lf
+package-lock.json text eol=lf
+
+# Binary assets (no EOL conversion).
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff  binary
+*.woff2 binary
+*.exe  binary
