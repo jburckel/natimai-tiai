@@ -1,40 +1,116 @@
-// Package collector reads Microsoft Defender state.
-//
-// Target implementation (M2): query WMI namespace ROOT\Microsoft\Windows\Defender
-// (class MSFT_MpComputerStatus) via github.com/yusufpapurcu/wmi, and run scans /
-// signature updates through MSFT_MpScan.Start / MSFT_MpSignature.Update.
-//
-// The existing agent in natimai-windows-console already implements this; port
-// internal/collector/defender.go from there. This stub keeps the skeleton
-// buildable on any platform.
+// Package collector reads Microsoft Defender state and drives scans / signature
+// updates. Per plan §2.6, status and threats are read via WMI (namespace
+// ROOT\Microsoft\Windows\Defender) — cheap, no process spawn — while the
+// actions not cleanly exposed as WMI methods (scans, signature update) fall
+// back to PowerShell cmdlets. Mapping helpers below are pure and platform-
+// independent so they can be unit-tested anywhere.
 package collector
 
-import (
-	"context"
+import "time"
 
-	"tiai/agent/internal/models"
-)
-
-// ReadDefenderState returns the current Defender status.
-func ReadDefenderState(ctx context.Context) (*models.DefenderState, error) {
-	// TODO(M2): WMI MSFT_MpComputerStatus.
-	return &models.DefenderState{}, nil
+// mapSeverity maps MSFT_MpThreat.SeverityID to a label.
+func mapSeverity(id uint32) string {
+	switch id {
+	case 1:
+		return "low"
+	case 2:
+		return "medium"
+	case 4:
+		return "high"
+	case 5:
+		return "severe"
+	default:
+		return "unknown"
+	}
 }
 
-// RunQuickScan triggers a Defender quick scan.
-func RunQuickScan(ctx context.Context) (string, error) {
-	// TODO(M2): MSFT_MpScan.Start(ScanType=Quick).
-	return "", nil
+// mapThreatStatus maps MSFT_MpThreatDetection.ThreatStatusID to a label.
+func mapThreatStatus(id uint32) string {
+	switch id {
+	case 0:
+		return "unknown"
+	case 1:
+		return "active"
+	case 2:
+		return "cleaned"
+	case 3:
+		return "quarantined"
+	case 4:
+		return "removed"
+	case 5:
+		return "allowed"
+	case 6:
+		return "blocked"
+	case 102:
+		return "quarantine_failed"
+	case 103:
+		return "remove_failed"
+	case 104:
+		return "allow_failed"
+	case 105:
+		return "abandoned"
+	case 107:
+		return "block_failed"
+	default:
+		return "active"
+	}
 }
 
-// RunFullScan triggers a Defender full scan.
-func RunFullScan(ctx context.Context) (string, error) {
-	// TODO(M2): MSFT_MpScan.Start(ScanType=Full).
-	return "", nil
+// mapCategory maps the most common MSFT_MpThreat.CategoryID values. The threat
+// name already encodes the category, so unknown ids are reported empty rather
+// than as noise.
+func mapCategory(id uint32) string {
+	switch id {
+	case 1:
+		return "adware"
+	case 2:
+		return "spyware"
+	case 3:
+		return "password_stealer"
+	case 4:
+		return "trojan_downloader"
+	case 5:
+		return "worm"
+	case 6:
+		return "backdoor"
+	case 7:
+		return "remote_access_trojan"
+	case 8:
+		return "trojan"
+	case 10:
+		return "keylogger"
+	case 22:
+		return "tool"
+	case 25:
+		return "remote_control_software"
+	case 27:
+		return "potentially_unwanted_software"
+	case 30:
+		return "exploit"
+	case 34:
+		return "tool"
+	case 37:
+		return "trojan_dropper"
+	case 41:
+		return "virus"
+	case 42:
+		return "known_bad"
+	case 46:
+		return "vulnerability"
+	default:
+		return ""
+	}
 }
 
-// UpdateSignatures triggers a Defender signature update.
-func UpdateSignatures(ctx context.Context) (string, error) {
-	// TODO(M2): MSFT_MpSignature.Update().
-	return "", nil
+// signatureAgeDays returns whole days between the signature timestamp and now,
+// or nil when no timestamp is available.
+func signatureAgeDays(lastUpdated *time.Time, now time.Time) *int {
+	if lastUpdated == nil || lastUpdated.IsZero() {
+		return nil
+	}
+	d := int(now.Sub(*lastUpdated).Hours() / 24)
+	if d < 0 {
+		d = 0
+	}
+	return &d
 }

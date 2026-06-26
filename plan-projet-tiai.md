@@ -352,13 +352,13 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 
 > Coché = fait. Mis à jour au fil du travail.
 
-**Instantané — 2026-06-13** · Phase 1 (Defender). Scaffold complet committé sur `main` (non poussé) ; backend lint/types/tests + CI verts.
+**Instantané — 2026-06-26** · Phase 1 (Defender). Agent Defender complet (M2) implémenté : WMI (état + menaces), PowerShell (scans/MAJ), identité réelle (SMBIOS/MachineGuid), DPAPI, service Windows, file locale + back-off. Validé sur poste réel (identité/WMI/sysinfo) ; reste la boucle end-to-end API→scan→résultat contre un serveur déployé. Tests Go de logique pure + builds Windows/Linux verts.
 
 | Jalon | État |
 |---|---|
 | M0 Fondations | 🟢 quasi fini — reste `docker compose up` validé + certificat de signature |
-| M1 Tranche verticale | 🟡 backend OK (enroll/heartbeat/identité) ; agent = squelette (service + WMI + DPAPI à porter) |
-| M2 Agent Defender complet | ⬜ à faire |
+| M1 Tranche verticale | 🟢 agent fonctionnel (service Windows, WMI `MSFT_MpComputerStatus`, token DPAPI) ; reste validation end-to-end sur serveur déployé |
+| M2 Agent Defender complet | 🟢 implémenté (état + menaces WMI, scans/MAJ PowerShell, config YAML/registre, file locale/back-off) ; reste DoD end-to-end sur poste réel |
 | M3 Backend complet | 🟡 commandes + garde-fou empreinte + dédup/stockage menaces ; reste stats, révocation, broadcast par filtre |
 | M4 Console | 🟡 liste des postes seule |
 | M5 Durcissement | 🟡 JWT + rôles, provider Mailgun ; reste audit, jobs ARQ branchés, rotation, rate-limit |
@@ -380,13 +380,14 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Résolution d'identité (SMBIOS UUID validé / repli UUID agent) + empreinte
 - [x] Agent : boucle de polling + client HTTP (squelette buildable)
 - [x] Frontend : page liste des postes
-- [ ] Agent : service Windows + lecture WMI `MSFT_MpComputerStatus` (port depuis natimai-windows-console)
-- [ ] Agent : stockage chiffré du token (DPAPI)
+- [x] Agent : service Windows + lecture WMI `MSFT_MpComputerStatus`
+- [x] Agent : stockage chiffré du token (DPAPI)
 
-**M2 — Agent Defender complet** · ⬜ à faire
-- [ ] Lecture complète état + remontée menaces (`detection_id`)
-- [ ] Exécution `quick_scan` / `full_scan` / `update_signatures` + remontée résultat
-- [ ] Config YAML + surcharge registre ; file locale + back-off
+**M2 — Agent Defender complet** · 🟢 implémenté (DoD end-to-end à valider sur serveur déployé)
+- [x] Lecture complète état (WMI `MSFT_MpComputerStatus`) + remontée menaces (`MSFT_MpThreatDetection`/`MSFT_MpThreat`, `detection_id`)
+- [x] Exécution `quick_scan` / `full_scan` / `update_signatures` (PowerShell) + remontée résultat
+- [x] Config YAML + surcharge registre (`HKLM\SOFTWARE\Tiai`) ; file locale + back-off
+- [x] Identité réelle (SMBIOS UUID via WMI, MachineGuid via registre, EK TPM best-effort) + host info (hostname/domaine/OS)
 
 **M3 — Backend complet** · 🟡 partiel
 - [x] File de commandes : création (route `POST /commands`, permission `command:execute`)

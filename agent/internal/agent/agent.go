@@ -1,9 +1,12 @@
 // Package agent runs the polling loop: enroll once, then heartbeat on an
-// interval, executing any commands the server hands back.
+// interval, executing any commands the server hands back. On transient server
+// failures it backs off; command results that can't be delivered are queued
+// locally and replayed (plan §2.9).
 package agent
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"path/filepath"
 	"time"
@@ -13,6 +16,8 @@ import (
 	"tiai/agent/internal/config"
 	"tiai/agent/internal/identity"
 	"tiai/agent/internal/models"
+	"tiai/agent/internal/queue"
+	"tiai/agent/internal/sysinfo"
 )
 
 // Version is the agent version reported on enroll/heartbeat.
@@ -24,6 +29,8 @@ type Agent struct {
 	cfgPath  string
 	client   *api.Client
 	identity identity.Identity
+	host     sysinfo.Info
+	queue    *queue.Queue
 }
 
 // New creates an agent from config.
@@ -36,6 +43,52 @@ func New(cfg *config.Config, cfgPath string) *Agent {
 	}
 }
 
+// Run blocks, polling until the context is cancelled.
+func (a *Agent) Run(ctx context.Context) error {
+	dir := filepath.Dir(a.cfgPath)
+
+	id, err := identity.Resolve(dir, a.cfg.MachineUUID)
+	if err != nil {
+		return fmt.Errorf("resolve identity: %w", err)
+	}
+	a.identity = id
+	a.host = sysinfo.Collect()
+
+	q, err := queue.New(filepath.Join(dir, "queue"), a.cfg.QueueMaxItems)
+	if err != nil {
+		return fmt.Errorf("open local queue: %w", err)
+	}
+	a.queue = q
+
+	base := time.Duration(a.cfg.HeartbeatIntervalSeconds) * time.Second
+	maxBackoff := time.Duration(a.cfg.BackoffMaxSeconds) * time.Second
+	wait := base
+
+	for {
+		if err := a.tick(ctx); err != nil {
+			wait = nextBackoff(wait, maxBackoff)
+			log.Printf("agent: tick failed, retrying in %s: %v", wait, err)
+		} else {
+			wait = base
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(wait):
+		}
+	}
+}
+
+// tick enrolls if needed, then runs one heartbeat cycle. A returned error means
+// the server was unreachable and the caller should back off.
+func (a *Agent) tick(ctx context.Context) error {
+	if err := a.ensureEnrolled(ctx); err != nil {
+		return err
+	}
+	return a.pollOnce(ctx)
+}
+
 // ensureEnrolled performs trust-on-first-use enrollment if no token is stored.
 func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if a.cfg.AuthToken != "" {
@@ -44,6 +97,9 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	fp := a.identity.Fingerprint
 	resp, err := a.client.Enroll(ctx, a.cfg.EnrollmentSecret, models.EnrollRequest{
 		MachineUUID:  a.identity.MachineUUID,
+		Hostname:     a.host.Hostname,
+		Domain:       a.host.Domain,
+		OSVersion:    a.host.OSVersion,
 		AgentVersion: Version,
 		Fingerprint:  &fp,
 	})
@@ -51,32 +107,49 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		return err
 	}
 	a.cfg.AuthToken = resp.Token
-	a.cfg.EnrollmentSecret = "" // no longer needed
 	a.client.SetToken(resp.Token)
-	return a.cfg.Save(a.cfgPath) // TODO: store token via DPAPI
+	if err := config.SaveToken(filepath.Dir(a.cfgPath), resp.Token); err != nil {
+		return fmt.Errorf("persist token: %w", err)
+	}
+	log.Printf("agent: enrolled as machine %s", resp.MachineID)
+	return nil
 }
 
-// pollOnce sends a heartbeat and executes returned commands.
-func (a *Agent) pollOnce(ctx context.Context) {
+// pollOnce flushes queued results, sends a heartbeat, and executes returned
+// commands. It returns an error only when the heartbeat itself fails.
+func (a *Agent) pollOnce(ctx context.Context) error {
+	a.flushQueue(ctx)
+
 	state, err := collector.ReadDefenderState(ctx)
 	if err != nil {
-		log.Printf("collector error: %v", err)
+		log.Printf("agent: defender state: %v", err)
 	}
+	threats, err := collector.ReadThreats(ctx)
+	if err != nil {
+		log.Printf("agent: defender threats: %v", err)
+	}
+
 	fp := a.identity.Fingerprint
 	resp, err := a.client.Heartbeat(ctx, models.HeartbeatRequest{
+		Hostname:     a.host.Hostname,
+		Domain:       a.host.Domain,
+		OSVersion:    a.host.OSVersion,
 		AgentVersion: Version,
 		Defender:     state,
 		Fingerprint:  &fp,
+		Threats:      threats,
 	})
 	if err != nil {
-		log.Printf("heartbeat error: %v", err)
-		return // TODO: local queue + back-off
+		return err
 	}
 	for _, cmd := range resp.Commands {
 		a.execute(ctx, cmd)
 	}
+	return nil
 }
 
+// execute runs a command and reports its result, queuing the result locally if
+// it can't be delivered right now.
 func (a *Agent) execute(ctx context.Context, cmd models.Command) {
 	var (
 		output string
@@ -90,7 +163,8 @@ func (a *Agent) execute(ctx context.Context, cmd models.Command) {
 	case "update_signatures":
 		output, err = collector.UpdateSignatures(ctx)
 	default:
-		err = nil
+		log.Printf("agent: unknown command type %q (id %s), ignoring", cmd.Type, cmd.ID)
+		return
 	}
 
 	res := models.CommandResult{Status: "succeeded", Output: output}
@@ -99,32 +173,40 @@ func (a *Agent) execute(ctx context.Context, cmd models.Command) {
 		res.Error = err.Error()
 	}
 	if perr := a.client.PostResult(ctx, cmd.ID, res); perr != nil {
-		log.Printf("post result error: %v", perr)
+		log.Printf("agent: post result failed, queuing %s: %v", cmd.ID, perr)
+		if qerr := a.queue.Enqueue(queue.Item{CommandID: cmd.ID, Result: res}); qerr != nil {
+			log.Printf("agent: queue result %s: %v", cmd.ID, qerr)
+		}
 	}
 }
 
-// Run blocks, polling until the context is cancelled.
-func (a *Agent) Run(ctx context.Context) error {
-	id, err := identity.Resolve(filepath.Dir(a.cfgPath), a.cfg.MachineUUID)
-	if err != nil {
-		return err
-	}
-	a.identity = id
-
-	if err := a.ensureEnrolled(ctx); err != nil {
-		return err
-	}
-	interval := time.Duration(a.cfg.HeartbeatIntervalSeconds) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	a.pollOnce(ctx)
+// flushQueue replays queued command results oldest-first, stopping at the first
+// delivery failure (the server is still down — retry next poll).
+func (a *Agent) flushQueue(ctx context.Context) {
 	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			a.pollOnce(ctx)
+		item, path, err := a.queue.Peek()
+		if err != nil {
+			log.Printf("agent: queue peek: %v", err)
+			return
+		}
+		if item == nil {
+			return
+		}
+		if err := a.client.PostResult(ctx, item.CommandID, item.Result); err != nil {
+			return
+		}
+		if err := a.queue.Remove(path); err != nil {
+			log.Printf("agent: queue remove: %v", err)
+			return
 		}
 	}
+}
+
+// nextBackoff doubles the wait up to a cap.
+func nextBackoff(cur, max time.Duration) time.Duration {
+	n := cur * 2
+	if n > max {
+		return max
+	}
+	return n
 }

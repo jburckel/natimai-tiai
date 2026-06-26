@@ -39,15 +39,27 @@ type DefenderState struct {
 	LastFullScan         *time.Time `json:"last_full_scan,omitempty"`
 }
 
+// Threat mirrors the backend ThreatReport: one Defender detection. detection_id
+// is the dedup key (UNIQUE (machine_id, detection_id) server-side, plan §2.7).
+type Threat struct {
+	DetectionID string     `json:"detection_id,omitempty"`
+	ThreatName  string     `json:"threat_name,omitempty"`
+	Severity    string     `json:"severity,omitempty"`
+	Category    string     `json:"category,omitempty"`
+	Status      string     `json:"status,omitempty"`
+	ActionTaken string     `json:"action_taken,omitempty"`
+	DetectedAt  *time.Time `json:"detected_at,omitempty"`
+}
+
 // HeartbeatRequest is sent on each poll (auth: Bearer token).
 type HeartbeatRequest struct {
-	Hostname     string           `json:"hostname,omitempty"`
-	Domain       string           `json:"domain,omitempty"`
-	OSVersion    string           `json:"os_version,omitempty"`
-	AgentVersion string           `json:"agent_version,omitempty"`
-	Defender     *DefenderState   `json:"defender,omitempty"`
-	Fingerprint  *Fingerprint     `json:"fingerprint,omitempty"`
-	Threats      []map[string]any `json:"threats,omitempty"`
+	Hostname     string         `json:"hostname,omitempty"`
+	Domain       string         `json:"domain,omitempty"`
+	OSVersion    string         `json:"os_version,omitempty"`
+	AgentVersion string         `json:"agent_version,omitempty"`
+	Defender     *DefenderState `json:"defender,omitempty"`
+	Fingerprint  *Fingerprint   `json:"fingerprint,omitempty"`
+	Threats      []Threat       `json:"threats,omitempty"`
 }
 
 // Command is a unit of work handed back by the server on heartbeat.
