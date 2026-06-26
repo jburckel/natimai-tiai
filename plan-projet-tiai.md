@@ -138,6 +138,17 @@ Le **backend** et le **frontend** font l'objet de tests, écrits **au fil de l'e
 - backend : `pytest` — tests unitaires sans base (sécurité/tokens, permissions, empreinte) + tests d'API sur base PostgreSQL de test (`TIAI_TEST_DATABASE_URL`, *skippés* sinon) ;
 - frontend : `vitest` — services et composants.
 
+### 2.14 — Contrat d'erreurs API (codes stables backend↔frontend)
+
+Les erreurs API suivent un **contrat partagé** entre backend et frontend (comme dans `fastapi-ecommerce`), pour que les messages restent **alignés et localisables** sans dépendre du texte.
+
+- **Enveloppe standardisée** : toute erreur renvoie `{"error": {"code", "message", "details"}}`.
+- **`code` stable et namespacé**, machine-readable (ex. `auth.credentials.invalid`, `auth.token.revoked`, `machine.not_found`, `command.forbidden`, `internal.server_error`). C'est le **`code`** (jamais le texte) que le frontend mappe vers ses messages **i18n**.
+- **Centralisé** : une exception applicative `AppError(code, status_code, message, details)` + des *exception handlers* enregistrés produisent l'enveloppe de façon uniforme ; les 500 **masquent les détails** hors environnement local.
+- **Source unique des codes** : maintenir la liste des codes côté backend et la **refléter côté frontend** (table de correspondance code → message), pour éviter la divergence.
+
+État actuel : le backend utilise encore `HTTPException(detail=...)` (texte libre) → **à migrer** vers `AppError` + handlers avant d'étoffer la console (M4) ; à cadrer côté frontend avec l'i18n.
+
 ---
 
 ## 3. Architecture cible
@@ -401,6 +412,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Qualité backend : `ruff format` + `ruff check` + `mypy --strict` (verts)
 - [x] Formatage frontend : `prettier`
 - [x] CI GitHub Actions (backend : uv + ruff + mypy + pytest avec Postgres ; frontend : prettier + vitest)
+- [ ] Contrat d'erreurs API (`AppError` + handlers, `code` stable ↔ i18n frontend) — à migrer depuis `HTTPException` (cf. §2.14)
 
 ---
 

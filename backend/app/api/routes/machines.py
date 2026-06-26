@@ -64,12 +64,12 @@ async def list_machines(
         stmt = stmt.where(col(Machine.domain) == domain)
 
     total = await session.scalar(select(func.count()).select_from(stmt.subquery()))
-    rows = await session.execute(
+    rows = await session.exec(
         stmt.order_by(col(Machine.last_seen).desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
-    items = [MachineOut.model_validate(m) for m in rows.scalars().all()]
+    items = [MachineOut.model_validate(m) for m in rows.all()]
     return MachineList(items=items, total=total or 0, page=page, page_size=page_size)
 
 

@@ -54,6 +54,11 @@ plugins = ["pydantic.mypy"]
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+filterwarnings = [
+    # SQLModel nudges toward session.exec(); kept execute() is intentional for
+    # text()/INSERT/UPDATE statements where exec() does not apply.
+    'ignore:(?s).*session\.exec\(\):DeprecationWarning',
+]
 
 [tool.coverage.run]
 source = ["app"]
