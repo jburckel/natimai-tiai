@@ -36,10 +36,10 @@ async def flag_inactive_machines(ctx: dict[str, Any]) -> int:
     """Count machines that have not checked in recently (alert candidates)."""
     cutoff = datetime.now(UTC) - timedelta(days=settings.INACTIVE_AFTER_DAYS)
     async with AsyncSession(engine) as session:
-        rows = await session.execute(
+        rows = await session.exec(
             select(Machine).where(col(Machine.last_seen) < cutoff)
         )
-        inactive = rows.scalars().all()
+        inactive = rows.all()
         # TODO: send a digest e-mail via app.features.notification.mailgun
         return len(inactive)
 

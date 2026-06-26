@@ -107,10 +107,10 @@ async def enroll(payload: EnrollRequest, session: SessionDep) -> EnrollResponse:
     Idempotent on machine_uuid: re-enrollment rotates the token. A known
     machine_uuid re-enrolling is a guard-rail signal (reinstall vs token theft).
     """
-    result = await session.execute(
+    result = await session.exec(
         select(Machine).where(Machine.machine_uuid == payload.machine_uuid)
     )
-    machine = result.scalar_one_or_none()
+    machine = result.one_or_none()
     fp = payload.fingerprint or Fingerprint()
 
     token = security.generate_token()
@@ -128,7 +128,7 @@ async def enroll(payload: EnrollRequest, session: SessionDep) -> EnrollResponse:
     # Another active identity sharing the same SMBIOS anchor → re-image of the
     # same physical box or a clone → flag for manual reconciliation (merge).
     if fp.smbios_uuid:
-        other = await session.execute(
+        other = await session.exec(
             select(Machine.id)
             .where(Machine.smbios_uuid == fp.smbios_uuid)
             .where(Machine.machine_uuid != payload.machine_uuid)
@@ -201,13 +201,13 @@ async def heartbeat(
     if payload.threats:
         await upsert_threats(session, machine.id, payload.threats)
 
-    rows = await session.execute(
+    rows = await session.exec(
         select(Command)
         .where(Command.machine_id == machine.id)
         .where(Command.status == CommandStatus.PENDING)
         .where(Command.expires_at > utcnow())
     )
-    pending = rows.scalars().all()
+    pending = rows.all()
     for cmd in pending:
         cmd.status = CommandStatus.DELIVERED
         cmd.delivered_at = utcnow()

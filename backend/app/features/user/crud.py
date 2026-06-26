@@ -7,8 +7,8 @@ from app.features.user.models import Role, User
 
 async def get_by_email(session: AsyncSession, email: str) -> User | None:
     """Fetch a user by email (case-sensitive)."""
-    result = await session.execute(select(User).where(User.email == email))
-    return result.scalar_one_or_none()
+    result = await session.exec(select(User).where(User.email == email))
+    return result.one_or_none()
 
 
 async def create_user(

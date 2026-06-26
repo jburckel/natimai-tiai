@@ -44,10 +44,8 @@ async def get_current_machine(
     token = authorization.removeprefix("Bearer ").strip()
     token_hash = security.hash_token(token)
 
-    result = await session.execute(
-        select(Machine).where(Machine.token_hash == token_hash)
-    )
-    machine: Machine | None = result.scalar_one_or_none()
+    result = await session.exec(select(Machine).where(Machine.token_hash == token_hash))
+    machine = result.one_or_none()
     if machine is None or machine.token_revoked:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

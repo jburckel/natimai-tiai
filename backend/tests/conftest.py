@@ -18,6 +18,10 @@ import pytest_asyncio
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+# A long-enough key avoids PyJWT's HMAC key-length warning in tests (set before
+# app.core.config is imported). Real deployments override SECRET_KEY via env.
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production-0123456789")
+
 TEST_DATABASE_URL = os.getenv("TIAI_TEST_DATABASE_URL")
 
 
