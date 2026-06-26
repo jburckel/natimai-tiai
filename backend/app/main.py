@@ -4,11 +4,15 @@ from starlette.middleware.cors import CORSMiddleware
 from app.api import api_router
 from app.api.routes.health import router as health_router
 from app.core.config import settings
+from app.core.errors import register_error_handlers
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
 )
+
+# Standardized error envelope for every error response (plan §2.14).
+register_error_handlers(app)
 
 if settings.all_cors_origins:
     app.add_middleware(

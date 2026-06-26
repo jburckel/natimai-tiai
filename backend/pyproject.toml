@@ -63,6 +63,9 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["app"]
 omit = ["app/alembic/*", "app/scripts/*"]
+# SQLAlchemy's async layer runs handler code across greenlet switches; without
+# this, coverage loses track of lines after each await and under-reports.
+concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
 show_missing = true

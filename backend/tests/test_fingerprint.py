@@ -35,3 +35,13 @@ def test_store_updates_only_provided_components():
     assert m.machine_guid == "guid-1"  # not overwritten by None
     assert m.smbios_uuid == "smbios-2"
     assert m.tpm_ek_hash == "tpm-1"
+
+
+def test_store_sets_all_provided_components():
+    m = _machine()
+    store_fingerprint(
+        m, machine_guid="guid-9", smbios_uuid="smbios-9", tpm_ek_hash="tpm-9"
+    )
+    assert m.machine_guid == "guid-9"
+    assert m.smbios_uuid == "smbios-9"
+    assert m.tpm_ek_hash == "tpm-9"

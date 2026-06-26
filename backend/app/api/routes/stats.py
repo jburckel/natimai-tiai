@@ -1,0 +1,75 @@
+"""Console dashboard KPIs (plan §6, M3)."""
+
+from datetime import datetime
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy import func
+from sqlalchemy.sql.elements import ColumnElement
+from sqlmodel import col, select
+
+from app.api.deps import SessionDep, require_permission
+from app.core.config import settings
+from app.features.base import utcnow
+from app.features.machine.models import Machine
+from app.features.machine.status import MachineStatus, status_clause
+from app.features.threat.models import Threat
+from app.features.user.permissions import Action, Resource
+
+router = APIRouter(
+    prefix="/stats",
+    tags=["stats"],
+    dependencies=[Depends(require_permission(Resource.MACHINE, Action.READ))],
+)
+
+
+class StatsOverview(BaseModel):
+    """Fleet KPIs for the dashboard cards."""
+
+    total: int
+    up_to_date: int
+    outdated: int
+    needs_verification: int
+    inactive: int
+    with_active_threats: int
+
+
+async def _count(session: SessionDep, clause: ColumnElement[bool] | None = None) -> int:
+    stmt = select(func.count()).select_from(Machine)
+    if clause is not None:
+        stmt = stmt.where(clause)
+    return await session.scalar(stmt) or 0
+
+
+@router.get("/overview", response_model=StatsOverview)
+async def overview(session: SessionDep) -> StatsOverview:
+    """Aggregate fleet status (total, freshness, verification, inactivity, threats)."""
+    now: datetime = utcnow()
+    days = settings.INACTIVE_AFTER_DAYS
+
+    total = await _count(session)
+    up_to_date = await _count(
+        session, status_clause(MachineStatus.UP_TO_DATE, now, days)
+    )
+    needs_verification = await _count(
+        session, status_clause(MachineStatus.NEEDS_VERIFICATION, now, days)
+    )
+    inactive = await _count(session, status_clause(MachineStatus.INACTIVE, now, days))
+
+    with_active_threats = (
+        await session.scalar(
+            select(func.count(func.distinct(Threat.machine_id))).where(
+                col(Threat.status) == "active"
+            )
+        )
+        or 0
+    )
+
+    return StatsOverview(
+        total=total,
+        up_to_date=up_to_date,
+        outdated=total - up_to_date,
+        needs_verification=needs_verification,
+        inactive=inactive,
+        with_active_threats=with_active_threats,
+    )

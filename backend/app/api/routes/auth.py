@@ -3,12 +3,13 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core import security
+from app.core.errors import AppError, ErrorCode
 from app.features.user import crud
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -40,9 +41,10 @@ async def login(
     """Authenticate with email (username) + password, return a JWT."""
     user = await crud.authenticate(session, form.username, form.password)
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+        raise AppError(
+            code=ErrorCode.AUTH_CREDENTIALS_INVALID,
+            status_code=401,
+            message="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return Token(access_token=security.create_access_token(user.id))

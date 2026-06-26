@@ -147,7 +147,7 @@ Les erreurs API suivent un **contrat partagé** entre backend et frontend (comme
 - **Centralisé** : une exception applicative `AppError(code, status_code, message, details)` + des *exception handlers* enregistrés produisent l'enveloppe de façon uniforme ; les 500 **masquent les détails** hors environnement local.
 - **Source unique des codes** : maintenir la liste des codes côté backend et la **refléter côté frontend** (table de correspondance code → message), pour éviter la divergence.
 
-État actuel : le backend utilise encore `HTTPException(detail=...)` (texte libre) → **à migrer** vers `AppError` + handlers avant d'étoffer la console (M4) ; à cadrer côté frontend avec l'i18n.
+État actuel : **migré** ✅. Le backend lève des `AppError(code, status_code, message, details)` ([app/core/errors.py](backend/app/core/errors.py)) ; quatre handlers (AppError, validation 422, HTTPException framework, 500 masqué hors `local`) produisent l'enveloppe `{"error": {code, message, details}}`. Catalogue stable `ErrorCode` côté backend, reflété côté frontend ([frontend/src/services/errors.ts](frontend/src/services/errors.ts)) en table `code → message` (FR) consommée par les pages via `apiErrorMessage`. Reste : une vraie lib i18n (vue-i18n) si le multilingue devient nécessaire.
 
 ---
 
@@ -352,15 +352,19 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 
 > Coché = fait. Mis à jour au fil du travail.
 
-**Instantané — 2026-06-13** · Phase 1 (Defender). Scaffold complet committé sur `main` (non poussé) ; backend lint/types/tests + CI verts.
+**Instantané — 2026-06-26** · Phase 1 (Defender). Agent Defender complet (M2) implémenté : WMI (état + menaces), PowerShell (scans/MAJ), identité réelle (SMBIOS/MachineGuid), DPAPI, service Windows, file locale + back-off. Validé sur poste réel (identité/WMI/sysinfo) ; reste la boucle end-to-end API→scan→résultat contre un serveur déployé. Tests Go de logique pure + builds Windows/Linux verts.
+> Backend complet (M3) implémenté : broadcast de commandes par filtre + suivi + expiration, stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, calcul `is_up_to_date`, pool DB configurable. 34 tests backend verts sur Postgres (ruff + mypy OK).
+> Console (M4) implémentée : login JWT (store Pinia + interceptor + guard), dashboard KPI/alertes, filtres postes, vue détail (état Defender + menaces + commandes), actions de masse, révocation. Typecheck + build SPA OK, 18 tests vitest (couverture 100 % services).
+> Contrat d'erreurs (§2.14) **migré** : `AppError` + handlers (enveloppe stable), catalogue `ErrorCode` reflété côté frontend (`errors.ts`) et consommé par les pages.
+> Fusion de postes (§8) **implémentée** : merge backend (rattachement menaces/commandes + dédup + suppression du doublon) + découverte des doublons par SMBIOS + dialog UI. **46 tests backend** (dont 8 de contrat + 4 de fusion) + **20 vitest** (couverture 100 % services) verts ; ruff/mypy/typecheck/build SPA OK. Phase 1 backend + console fonctionnellement complètes ; reste M6 (packaging/GPO) et la validation end-to-end sur stack déployée.
 
 | Jalon | État |
 |---|---|
 | M0 Fondations | 🟢 quasi fini — reste `docker compose up` validé + certificat de signature |
-| M1 Tranche verticale | 🟡 backend OK (enroll/heartbeat/identité) ; agent = squelette (service + WMI + DPAPI à porter) |
-| M2 Agent Defender complet | ⬜ à faire |
-| M3 Backend complet | 🟡 commandes + garde-fou empreinte + dédup/stockage menaces ; reste stats, révocation, broadcast par filtre |
-| M4 Console | 🟡 liste des postes seule |
+| M1 Tranche verticale | 🟢 agent fonctionnel (service Windows, WMI `MSFT_MpComputerStatus`, token DPAPI) ; reste validation end-to-end sur serveur déployé |
+| M2 Agent Defender complet | 🟢 implémenté (état + menaces WMI, scans/MAJ PowerShell, config YAML/registre, file locale/back-off) ; reste DoD end-to-end sur poste réel |
+| M3 Backend complet | 🟢 commandes (broadcast par filtre + suivi + expiration), stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, `is_up_to_date` calculé, pool DB configurable ; tests verts sur Postgres |
+| M4 Console | 🟢 login JWT + dashboard KPI/alertes + filtres + détail poste + actions de masse + révocation + fusion de postes |
 | M5 Durcissement | 🟡 JWT + rôles, provider Mailgun ; reste audit, jobs ARQ branchés, rotation, rate-limit |
 | M6 Packaging & GPO | ⬜ à faire |
 | Transverse | 🟢 tests backend/frontend + ruff + mypy + CI (tous verts) |
@@ -380,24 +384,33 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Résolution d'identité (SMBIOS UUID validé / repli UUID agent) + empreinte
 - [x] Agent : boucle de polling + client HTTP (squelette buildable)
 - [x] Frontend : page liste des postes
-- [ ] Agent : service Windows + lecture WMI `MSFT_MpComputerStatus` (port depuis natimai-windows-console)
-- [ ] Agent : stockage chiffré du token (DPAPI)
+- [x] Agent : service Windows + lecture WMI `MSFT_MpComputerStatus`
+- [x] Agent : stockage chiffré du token (DPAPI)
 
-**M2 — Agent Defender complet** · ⬜ à faire
-- [ ] Lecture complète état + remontée menaces (`detection_id`)
-- [ ] Exécution `quick_scan` / `full_scan` / `update_signatures` + remontée résultat
-- [ ] Config YAML + surcharge registre ; file locale + back-off
+**M2 — Agent Defender complet** · 🟢 implémenté (DoD end-to-end à valider sur serveur déployé)
+- [x] Lecture complète état (WMI `MSFT_MpComputerStatus`) + remontée menaces (`MSFT_MpThreatDetection`/`MSFT_MpThreat`, `detection_id`)
+- [x] Exécution `quick_scan` / `full_scan` / `update_signatures` (PowerShell) + remontée résultat
+- [x] Config YAML + surcharge registre (`HKLM\SOFTWARE\Tiai`) ; file locale + back-off
+- [x] Identité réelle (SMBIOS UUID via WMI, MachineGuid via registre, EK TPM best-effort) + host info (hostname/domaine/OS)
 
-**M3 — Backend complet** · 🟡 partiel
+**M3 — Backend complet** · 🟢 implémenté
 - [x] File de commandes : création (route `POST /commands`, permission `command:execute`)
 - [x] Garde-fou d'empreinte `needs_verification` (enroll + heartbeat)
 - [x] Déduplication + stockage des menaces (contrainte + upsert `ON CONFLICT DO NOTHING`, testé)
-- [ ] Création **groupée** par filtre, transitions d'état complètes
-- [ ] Stats (`/stats/overview`), recherche/filtrage avancés, révocation de token (API)
+- [x] Création **groupée** par filtre (tous / domaine / statut) + suivi `GET /commands` + expiration (`mark_expired`, plan §2.8)
+- [x] Stats `GET /stats/overview` (total, à jour/non, à vérifier, inactifs, postes avec menaces actives)
+- [x] Recherche/filtrage `/machines` (hostname/UUID, domaine, statut) + listing `GET /threats`
+- [x] Révocation de token (`POST /machines/{id}/revoke-token`, kill-switch) + ré-enrôlement
+- [x] Calcul de `is_up_to_date` au heartbeat (AV+RTP+âge signatures) ; pool DB (psycopg) configurable
 
-**M4 — Console** · 🟡 partiel
-- [x] Liste des postes (squelette)
-- [ ] Dashboard KPI, vue détail poste, actions de masse, fusion de postes (`needs_verification`)
+**M4 — Console** · 🟢 implémenté
+- [x] Authentification console (login JWT, store Pinia, interceptor Bearer + redirection sur 401, guard de route)
+- [x] Dashboard : cartes KPI (`/stats/overview`) + listes d'alertes (postes non à jour, menaces actives)
+- [x] Liste des postes : recherche (nom/UUID), filtres domaine + statut, lien vers le détail
+- [x] Vue détail poste : identité + état Defender complet, historique menaces, dernières commandes, bannière `needs_verification`
+- [x] Sélection multiple → actions de masse (scan rapide/complet, MAJ signatures) + révocation de token, avec retour `Notify`
+- [x] **Fusion de postes** (`needs_verification`, plan §8) : backend `POST /machines/{id}/merge` (rattache menaces + commandes, dédup `detection_id`, lève le flag, supprime le doublon) + `GET /machines/{id}/duplicates` (même SMBIOS) ; UI = dialog de fusion sur la vue détail
+- [x] Détail backend enrichi (`MachineDetailOut`) + services frontend testés (vitest, couverture 100 % sur `src/services`)
 
 **M5 — Durcissement** · 🟡 partiel (anticipé)
 - [x] Auth console JWT + rôles `admin` / `readonly` (permissions `(ressource, action)`)
@@ -412,7 +425,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Qualité backend : `ruff format` + `ruff check` + `mypy --strict` (verts)
 - [x] Formatage frontend : `prettier`
 - [x] CI GitHub Actions (backend : uv + ruff + mypy + pytest avec Postgres ; frontend : prettier + vitest)
-- [ ] Contrat d'erreurs API (`AppError` + handlers, `code` stable ↔ i18n frontend) — à migrer depuis `HTTPException` (cf. §2.14)
+- [x] Contrat d'erreurs API (`AppError` + handlers, enveloppe `{error:{code,message,details}}`, catalogue `ErrorCode` reflété côté frontend `errors.ts`) — migré depuis `HTTPException` (cf. §2.14), testé (8 tests backend de contrat + 6 frontend)
 
 ---
 

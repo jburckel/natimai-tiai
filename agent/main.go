@@ -1,8 +1,9 @@
-// Command tiai-agent is the Windows endpoint agent.
+// Command tiai-agent is the Windows endpoint agent: a polling service that
+// reports Microsoft Defender state to the Tiai server and runs its commands.
 //
-// Skeleton commands: run / version / init-config. Windows service install
-// (golang.org/x/sys/windows/svc) and WMI Defender access are ported from
-// natimai-windows-console in M1/M2.
+// Commands: run / init-config / install / uninstall / start / stop / status /
+// version. When started by the Windows Service Control Manager, `run` hands off
+// to the service harness; otherwise it runs in the foreground.
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
 
 	"tiai/agent/internal/agent"
 	"tiai/agent/internal/config"
+	"tiai/agent/internal/service"
 )
 
 func main() {
@@ -28,6 +30,16 @@ func main() {
 		doRun(os.Args[2:])
 	case "init-config":
 		doInitConfig(os.Args[2:])
+	case "install":
+		doInstall(os.Args[2:])
+	case "uninstall":
+		fatalIf(service.Uninstall())
+	case "start":
+		fatalIf(service.Start())
+	case "stop":
+		fatalIf(service.Stop())
+	case "status":
+		fatalIf(service.Status())
 	case "version":
 		fmt.Printf("Tiai agent v%s\n", agent.Version)
 	default:
@@ -43,11 +55,14 @@ func printUsage() {
 	fmt.Println("Usage: tiai-agent <command> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  run            Run the polling loop (foreground)")
+	fmt.Println("  run            Run the polling loop (foreground, or under the SCM)")
 	fmt.Println("  init-config    Generate a default config file")
+	fmt.Println("  install        Install and register the Windows service")
+	fmt.Println("  uninstall      Remove the Windows service")
+	fmt.Println("  start          Start the installed service")
+	fmt.Println("  stop           Stop the service")
+	fmt.Println("  status         Show the service state")
 	fmt.Println("  version        Show version")
-	fmt.Println()
-	fmt.Println("  TODO (M1): install/uninstall/start/stop as a Windows service.")
 }
 
 func doRun(args []string) {
@@ -59,6 +74,15 @@ func doRun(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Started by the Service Control Manager → run under the service harness.
+	if isSvc, _ := service.IsWindowsService(); isSvc {
+		if err := service.Run(cfg, *cfgPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Service error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -88,5 +112,20 @@ func doInitConfig(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Config written to %s\n", *cfgPath)
-	fmt.Println("Set enrollment_secret and TLS as needed. Identity is auto-resolved at first run.")
+	fmt.Println("Set enrollment_secret (config or HKLM\\SOFTWARE\\Tiai) and TLS as needed.")
+	fmt.Println("Identity is auto-resolved at first run; the token is stored encrypted (DPAPI).")
+}
+
+func doInstall(args []string) {
+	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	cfgPath := fs.String("config", config.DefaultConfigPath(), "config file path")
+	_ = fs.Parse(args)
+	fatalIf(service.Install(*cfgPath))
+}
+
+func fatalIf(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }

@@ -98,14 +98,3 @@ func newUUIDv4() (string, error) {
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
-
-// --- Platform reads (stubs; port from natimai-windows-console) --------------
-
-// readSMBIOSUUID returns Win32_ComputerSystemProduct.UUID via WMI on Windows.
-func readSMBIOSUUID() string { return "" } // TODO(M1): WMI
-
-// readMachineGUID returns HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid.
-func readMachineGUID() string { return "" } // TODO(M1): registry
-
-// readTPMEKHash returns a hash of the TPM 2.0 Endorsement Key public, if any.
-func readTPMEKHash() string { return "" } // TODO(M2): TBS / Get-TpmEndorsementKeyInfo

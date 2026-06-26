@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import InvalidTokenError
 from sqlmodel import select
@@ -11,6 +11,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core import security
 from app.core.config import settings
 from app.core.db import get_db
+from app.core.errors import AppError, ErrorCode
 from app.features.machine.models import Machine
 from app.features.user.models import User
 from app.features.user.permissions import Action, Resource, has_permission
@@ -25,9 +26,10 @@ async def verify_enrollment_secret(
 ) -> None:
     """Guard for POST /agent/enroll — validates the shared enrollment secret."""
     if x_enrollment_secret != settings.ENROLLMENT_SECRET:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid enrollment secret",
+        raise AppError(
+            code=ErrorCode.AUTH_ENROLLMENT_SECRET_INVALID,
+            status_code=401,
+            message="Invalid enrollment secret",
         )
 
 
@@ -37,19 +39,23 @@ async def get_current_machine(
 ) -> Machine:
     """Resolve the calling machine from its Bearer token (per-machine auth)."""
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
+        raise AppError(
+            code=ErrorCode.AUTH_TOKEN_MISSING,
+            status_code=401,
+            message="Missing bearer token",
         )
     token = authorization.removeprefix("Bearer ").strip()
     token_hash = security.hash_token(token)
 
     result = await session.exec(select(Machine).where(Machine.token_hash == token_hash))
     machine = result.one_or_none()
-    if machine is None or machine.token_revoked:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or revoked token",
+    if machine is None:
+        raise AppError(
+            code=ErrorCode.AUTH_TOKEN_INVALID, status_code=401, message="Invalid token"
+        )
+    if machine.token_revoked:
+        raise AppError(
+            code=ErrorCode.AUTH_TOKEN_REVOKED, status_code=401, message="Token revoked"
         )
     return machine
 
@@ -65,9 +71,10 @@ async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
 ) -> User:
     """Resolve the authenticated console user from a JWT bearer token."""
-    credentials_error = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+    credentials_error = AppError(
+        code=ErrorCode.AUTH_CREDENTIALS_INVALID,
+        status_code=401,
+        message="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
@@ -94,9 +101,11 @@ def require_permission(
 
     async def checker(user: CurrentUser) -> User:
         if not has_permission(user.role, resource.value, action.value):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Missing permission: {resource.value}:{action.value}",
+            raise AppError(
+                code=ErrorCode.AUTH_PERMISSION_DENIED,
+                status_code=403,
+                message=f"Missing permission: {resource.value}:{action.value}",
+                details={"resource": resource.value, "action": action.value},
             )
         return user
 

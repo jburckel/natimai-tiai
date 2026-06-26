@@ -1,5 +1,6 @@
 node_modules
 dist
+coverage
 .quasar
 src-capacitor
 src-cordova

@@ -9,10 +9,13 @@ from sqlmodel import select
 
 from app.api.deps import CurrentMachine, SessionDep, verify_enrollment_secret
 from app.core import security
+from app.core.config import settings
 from app.features.base import utcnow
+from app.features.command import crud as command_crud
 from app.features.command.models import Command, CommandStatus
 from app.features.machine import fingerprint
 from app.features.machine.models import Machine
+from app.features.machine.status import compute_is_up_to_date
 from app.features.threat.crud import upsert_threats
 from app.features.threat.schemas import ThreatReport
 
@@ -180,7 +183,12 @@ async def heartbeat(
         machine.signature_age_days = d.signature_age_days
         machine.last_quick_scan = d.last_quick_scan
         machine.last_full_scan = d.last_full_scan
-        # TODO(M3): compute is_up_to_date from age + RTP.
+        machine.is_up_to_date = compute_is_up_to_date(
+            av_enabled=machine.av_enabled,
+            rtp_enabled=machine.rtp_enabled,
+            signature_age_days=machine.signature_age_days,
+            max_age_days=settings.SIGNATURE_MAX_AGE_DAYS,
+        )
 
     if payload.fingerprint is not None:
         fp = payload.fingerprint
@@ -200,6 +208,10 @@ async def heartbeat(
 
     if payload.threats:
         await upsert_threats(session, machine.id, payload.threats)
+
+    # Persist the EXPIRED status for this machine's stale pending commands so a
+    # long-offline host doesn't run a scan requested weeks ago (plan §2.8).
+    await command_crud.mark_expired(session, machine_id=machine.id)
 
     rows = await session.exec(
         select(Command)
