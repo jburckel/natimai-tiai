@@ -396,3 +396,130 @@ async def test_merge_into_self_rejected(client, db_session):
     )
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "machine.merge.self"
+
+
+# --- Agent command result + heartbeat details ------------------------------
+
+
+async def test_command_result_flow(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    enrolled = await _enroll(client, "m-result")
+    token = enrolled["token"]
+    auth = {"Authorization": f"Bearer {token}"}
+
+    await client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"type": "quick_scan", "machine_ids": [enrolled["machine_id"]]},
+    )
+    # Heartbeat delivers the pending command.
+    hb = await _heartbeat(client, token)
+    commands = hb.json()["commands"]
+    assert len(commands) == 1
+    cmd_id = commands[0]["id"]
+
+    # Agent posts the result.
+    res = await client.post(
+        f"/api/v1/agent/commands/{cmd_id}/result",
+        headers=auth,
+        json={"status": "succeeded", "output": "clean"},
+    )
+    assert res.status_code == 200
+    assert res.json()["status"] == "ok"
+
+    listed = await client.get(
+        f"/api/v1/commands?machine_id={enrolled['machine_id']}", headers=headers
+    )
+    item = listed.json()["items"][0]
+    assert item["status"] == "succeeded"
+    assert item["result_output"] == "clean"
+
+
+async def test_command_result_unknown_is_ignored(client, db_session):
+    import uuid
+
+    enrolled = await _enroll(client, "m-result-x")
+    res = await client.post(
+        f"/api/v1/agent/commands/{uuid.uuid4()}/result",
+        headers={"Authorization": f"Bearer {enrolled['token']}"},
+        json={"status": "succeeded"},
+    )
+    assert res.status_code == 200
+    assert res.json()["status"] == "ignored"
+
+
+async def test_heartbeat_stores_host_fields(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    enrolled = await _enroll(client, "m-host")
+    await _heartbeat(
+        client,
+        enrolled["token"],
+        hostname="PC-7",
+        domain="CORP",
+        os_version="Windows 11",
+        agent_version="1.2.3",
+    )
+    body = (
+        await client.get(f"/api/v1/machines/{enrolled['machine_id']}", headers=headers)
+    ).json()
+    assert body["hostname"] == "PC-7"
+    assert body["domain"] == "CORP"
+    assert body["os_version"] == "Windows 11"
+    assert body["agent_version"] == "1.2.3"
+
+
+async def test_heartbeat_fingerprint_change_flags_verification(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    enrolled = await _enroll(client, "m-fpchg", fingerprint={"smbios_uuid": "SMB-1"})
+    # A different SMBIOS anchor on a later heartbeat is suspicious.
+    await _heartbeat(client, enrolled["token"], fingerprint={"smbios_uuid": "SMB-2"})
+    body = (
+        await client.get(f"/api/v1/machines/{enrolled['machine_id']}", headers=headers)
+    ).json()
+    assert body["needs_verification"] is True
+
+
+async def test_threats_status_filter(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    enrolled = await _enroll(client, "m-thst")
+    await _heartbeat(
+        client,
+        enrolled["token"],
+        threats=[
+            {"detection_id": "A", "status": "active"},
+            {"detection_id": "R", "status": "removed"},
+        ],
+    )
+    active = await client.get("/api/v1/threats?status=active", headers=headers)
+    assert [t["detection_id"] for t in active.json()["items"]] == ["A"]
+
+
+async def test_machines_search_matches_uuid(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    await _enroll(client, "uuid-search-target", hostname="ZZZ")
+    resp = await client.get("/api/v1/machines?search=uuid-search", headers=headers)
+    assert [m["machine_uuid"] for m in resp.json()["items"]] == ["uuid-search-target"]
+
+
+async def test_duplicates_empty_without_smbios(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    enrolled = await _enroll(client, "no-smbios")  # no fingerprint → smbios is null
+    resp = await client.get(
+        f"/api/v1/machines/{enrolled['machine_id']}/duplicates", headers=headers
+    )
+    assert resp.json() == []
+
+
+async def test_me_returns_current_user(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.get("/api/v1/auth/me", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["email"] == "admin@test.local"
+
+
+async def test_health_reports_database_ok(client):
+    resp = await client.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["database"] is True

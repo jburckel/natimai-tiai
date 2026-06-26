@@ -110,3 +110,42 @@ async def test_no_auth_uses_auth_required_code(client):
     resp = await client.get("/api/v1/machines")
     assert resp.status_code == 401
     _assert_envelope(resp.json(), "auth.required")
+
+
+async def test_malformed_jwt_rejected(client):
+    resp = await client.get(
+        "/api/v1/machines", headers={"Authorization": "Bearer not.a.jwt"}
+    )
+    assert resp.status_code == 401
+    _assert_envelope(resp.json(), "auth.credentials.invalid")
+
+
+async def test_valid_jwt_unknown_user_rejected(client):
+    from app.core import security
+
+    token = security.create_access_token(uuid.uuid4())
+    resp = await client.get(
+        "/api/v1/machines", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 401
+    _assert_envelope(resp.json(), "auth.credentials.invalid")
+
+
+async def test_jwt_without_subject_rejected(client):
+    from datetime import UTC, datetime, timedelta
+
+    import jwt
+
+    from app.core.config import settings
+    from app.core.security import ALGORITHM
+
+    token = jwt.encode(
+        {"exp": datetime.now(UTC) + timedelta(minutes=5), "type": "access"},
+        settings.SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    resp = await client.get(
+        "/api/v1/machines", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 401
+    _assert_envelope(resp.json(), "auth.credentials.invalid")
