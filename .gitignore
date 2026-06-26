@@ -10,11 +10,15 @@ venv/
 .ruff_cache/
 .pytest_cache/
 .coverage
+coverage.xml
+coverage.json
+htmlcov/
 
 # Node / Quasar
 node_modules/
 frontend/dist/
 frontend/.quasar/
+frontend/coverage/
 *.log
 
 # Go

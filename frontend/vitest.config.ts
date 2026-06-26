@@ -18,5 +18,13 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['src/**/*.spec.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'json-summary'],
+      reportsDirectory: './coverage',
+      // Scope to the tested layer for now; widen as components get tests.
+      include: ['src/services/**'],
+      thresholds: { lines: 80, functions: 80, statements: 80, branches: 70 },
+    },
   },
 });

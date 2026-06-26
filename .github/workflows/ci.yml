@@ -9,9 +9,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  pull-requests: write # coverage comments on PRs
+
 jobs:
   backend:
-    name: Backend (lint · types · tests)
+    name: Backend (lint · types · tests · coverage)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -34,6 +38,8 @@ jobs:
 
     env:
       TIAI_TEST_DATABASE_URL: postgresql+psycopg://tiai:tiai@localhost:5432/tiai_test
+      # Optional PAT (scope `gist`) to publish the coverage badge. Absent → badge step skipped.
+      GIST_SECRET: ${{ secrets.GIST_SECRET }}
 
     steps:
       - uses: actions/checkout@v4
@@ -55,15 +61,44 @@ jobs:
       - name: Mypy
         run: uv run mypy app
 
-      - name: Pytest
-        run: uv run pytest
+      - name: Pytest (+ coverage)
+        run: uv run pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-report=json
+
+      - name: Coverage comment (PR)
+        if: github.event_name == 'pull_request'
+        uses: MishaKav/pytest-coverage-comment@main
+        with:
+          title: Couverture backend
+          pytest-xml-coverage-path: backend/coverage.xml
+          unique-id-for-comment: backend
+
+      - name: Read backend coverage
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GIST_SECRET != ''
+        id: cov
+        run: echo "pct=$(node -p "Math.round(require('./coverage.json').totals.percent_covered)")" >> "$GITHUB_OUTPUT"
+
+      - name: Coverage badge (gist)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GIST_SECRET != ''
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_SECRET }}
+          gistID: 80b72bc52448a36bc1a08370a68c88a1
+          filename: tiai-coverage-backend.json
+          label: couverture backend
+          message: ${{ steps.cov.outputs.pct }}%
+          valColorRange: ${{ steps.cov.outputs.pct }}
+          minColorRange: 30
+          maxColorRange: 90
 
   frontend:
-    name: Frontend (format · tests)
+    name: Frontend (format · tests · coverage)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
+
+    env:
+      GIST_SECRET: ${{ secrets.GIST_SECRET }}
 
     steps:
       - uses: actions/checkout@v4
@@ -81,5 +116,30 @@ jobs:
       - name: Prettier check
         run: npm run format:check
 
-      - name: Unit tests
-        run: npm test
+      - name: Tests (+ coverage)
+        run: npm run test:coverage
+
+      - name: Coverage comment (PR)
+        if: github.event_name == 'pull_request'
+        uses: davelosert/vitest-coverage-report-action@v2
+        with:
+          working-directory: frontend
+          name: Couverture frontend
+
+      - name: Read frontend coverage
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GIST_SECRET != ''
+        id: cov
+        run: echo "pct=$(node -p "Math.round(require('./coverage/coverage-summary.json').total.lines.pct)")" >> "$GITHUB_OUTPUT"
+
+      - name: Coverage badge (gist)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GIST_SECRET != ''
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_SECRET }}
+          gistID: 80b72bc52448a36bc1a08370a68c88a1
+          filename: tiai-coverage-frontend.json
+          label: couverture frontend
+          message: ${{ steps.cov.outputs.pct }}%
+          valColorRange: ${{ steps.cov.outputs.pct }}
+          minColorRange: 30
+          maxColorRange: 90
