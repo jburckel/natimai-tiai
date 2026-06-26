@@ -353,13 +353,14 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 > Coché = fait. Mis à jour au fil du travail.
 
 **Instantané — 2026-06-26** · Phase 1 (Defender). Agent Defender complet (M2) implémenté : WMI (état + menaces), PowerShell (scans/MAJ), identité réelle (SMBIOS/MachineGuid), DPAPI, service Windows, file locale + back-off. Validé sur poste réel (identité/WMI/sysinfo) ; reste la boucle end-to-end API→scan→résultat contre un serveur déployé. Tests Go de logique pure + builds Windows/Linux verts.
+> Backend complet (M3) implémenté : broadcast de commandes par filtre + suivi + expiration, stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, calcul `is_up_to_date`, pool DB configurable. 33 tests backend verts sur Postgres (ruff + mypy OK). Reste à migrer `HTTPException` → `AppError` (§2.14) avant d'étoffer la console (M4).
 
 | Jalon | État |
 |---|---|
 | M0 Fondations | 🟢 quasi fini — reste `docker compose up` validé + certificat de signature |
 | M1 Tranche verticale | 🟢 agent fonctionnel (service Windows, WMI `MSFT_MpComputerStatus`, token DPAPI) ; reste validation end-to-end sur serveur déployé |
 | M2 Agent Defender complet | 🟢 implémenté (état + menaces WMI, scans/MAJ PowerShell, config YAML/registre, file locale/back-off) ; reste DoD end-to-end sur poste réel |
-| M3 Backend complet | 🟡 commandes + garde-fou empreinte + dédup/stockage menaces ; reste stats, révocation, broadcast par filtre |
+| M3 Backend complet | 🟢 commandes (broadcast par filtre + suivi + expiration), stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, `is_up_to_date` calculé, pool DB configurable ; tests verts sur Postgres |
 | M4 Console | 🟡 liste des postes seule |
 | M5 Durcissement | 🟡 JWT + rôles, provider Mailgun ; reste audit, jobs ARQ branchés, rotation, rate-limit |
 | M6 Packaging & GPO | ⬜ à faire |
@@ -389,12 +390,15 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Config YAML + surcharge registre (`HKLM\SOFTWARE\Tiai`) ; file locale + back-off
 - [x] Identité réelle (SMBIOS UUID via WMI, MachineGuid via registre, EK TPM best-effort) + host info (hostname/domaine/OS)
 
-**M3 — Backend complet** · 🟡 partiel
+**M3 — Backend complet** · 🟢 implémenté
 - [x] File de commandes : création (route `POST /commands`, permission `command:execute`)
 - [x] Garde-fou d'empreinte `needs_verification` (enroll + heartbeat)
 - [x] Déduplication + stockage des menaces (contrainte + upsert `ON CONFLICT DO NOTHING`, testé)
-- [ ] Création **groupée** par filtre, transitions d'état complètes
-- [ ] Stats (`/stats/overview`), recherche/filtrage avancés, révocation de token (API)
+- [x] Création **groupée** par filtre (tous / domaine / statut) + suivi `GET /commands` + expiration (`mark_expired`, plan §2.8)
+- [x] Stats `GET /stats/overview` (total, à jour/non, à vérifier, inactifs, postes avec menaces actives)
+- [x] Recherche/filtrage `/machines` (hostname/UUID, domaine, statut) + listing `GET /threats`
+- [x] Révocation de token (`POST /machines/{id}/revoke-token`, kill-switch) + ré-enrôlement
+- [x] Calcul de `is_up_to_date` au heartbeat (AV+RTP+âge signatures) ; pool DB (psycopg) configurable
 
 **M4 — Console** · 🟡 partiel
 - [x] Liste des postes (squelette)

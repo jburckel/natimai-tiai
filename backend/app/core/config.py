@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = ""
     POSTGRES_DB: str = "tiai"
 
+    # Async connection pool (psycopg 3). Load is light (~1–3 req/s for 1000
+    # endpoints, plan §2.2) but the backend and ARQ worker share Postgres, so
+    # the pool is tunable per deployment.
+    POSTGRES_POOL_SIZE: int = 20
+    POSTGRES_MAX_OVERFLOW: int = 10
+    POSTGRES_POOL_TIMEOUT: int = 30
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:

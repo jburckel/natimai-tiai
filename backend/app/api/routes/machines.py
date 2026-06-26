@@ -8,11 +8,14 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import col, select
 
 from app.api.deps import SessionDep, require_permission
+from app.core.config import settings
+from app.features.base import utcnow
 from app.features.machine.models import Machine
+from app.features.machine.status import MachineStatus, status_clause
 from app.features.user.permissions import Action, Resource
 
 router = APIRouter(
@@ -53,15 +56,24 @@ async def list_machines(
     session: SessionDep,
     search: str | None = None,
     domain: str | None = None,
+    status: MachineStatus | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> MachineList:
-    """List machines with optional search/domain filters and pagination."""
+    """List machines with optional search/domain/status filters and pagination."""
     stmt = select(Machine)
     if search:
-        stmt = stmt.where(col(Machine.hostname).ilike(f"%{search}%"))
+        pattern = f"%{search}%"
+        stmt = stmt.where(
+            or_(
+                col(Machine.hostname).ilike(pattern),
+                col(Machine.machine_uuid).ilike(pattern),
+            )
+        )
     if domain:
         stmt = stmt.where(col(Machine.domain) == domain)
+    if status is not None:
+        stmt = stmt.where(status_clause(status, utcnow(), settings.INACTIVE_AFTER_DAYS))
 
     total = await session.scalar(select(func.count()).select_from(stmt.subquery()))
     rows = await session.exec(
@@ -80,3 +92,20 @@ async def get_machine(machine_id: uuid.UUID, session: SessionDep) -> MachineOut:
     if machine is None:
         raise HTTPException(status_code=404, detail="Machine not found")
     return MachineOut.model_validate(machine)
+
+
+@router.post(
+    "/{machine_id}/revoke-token",
+    dependencies=[Depends(require_permission(Resource.MACHINE, Action.WRITE))],
+)
+async def revoke_token(machine_id: uuid.UUID, session: SessionDep) -> dict[str, str]:
+    """Revoke a machine's token (kill-switch): its next call is rejected and it
+    must re-enroll, which issues a fresh token and clears the flag (plan §2.4).
+    """
+    machine = await session.get(Machine, machine_id)
+    if machine is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    machine.token_revoked = True
+    machine.updated_at = utcnow()
+    await session.commit()
+    return {"status": "revoked"}
