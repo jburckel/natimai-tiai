@@ -353,7 +353,8 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 > Coché = fait. Mis à jour au fil du travail.
 
 **Instantané — 2026-06-26** · Phase 1 (Defender). Agent Defender complet (M2) implémenté : WMI (état + menaces), PowerShell (scans/MAJ), identité réelle (SMBIOS/MachineGuid), DPAPI, service Windows, file locale + back-off. Validé sur poste réel (identité/WMI/sysinfo) ; reste la boucle end-to-end API→scan→résultat contre un serveur déployé. Tests Go de logique pure + builds Windows/Linux verts.
-> Backend complet (M3) implémenté : broadcast de commandes par filtre + suivi + expiration, stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, calcul `is_up_to_date`, pool DB configurable. 33 tests backend verts sur Postgres (ruff + mypy OK). Reste à migrer `HTTPException` → `AppError` (§2.14) avant d'étoffer la console (M4).
+> Backend complet (M3) implémenté : broadcast de commandes par filtre + suivi + expiration, stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, calcul `is_up_to_date`, pool DB configurable. 34 tests backend verts sur Postgres (ruff + mypy OK).
+> Console (M4) implémentée : login JWT (store Pinia + interceptor + guard), dashboard KPI/alertes, filtres postes, vue détail (état Defender + menaces + commandes), actions de masse, révocation. Typecheck + build SPA OK, 12 tests vitest (couverture 100 % services). Reste : migration `HTTPException` → `AppError` (§2.14) + i18n, et l'endpoint de fusion de postes.
 
 | Jalon | État |
 |---|---|
@@ -361,7 +362,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 | M1 Tranche verticale | 🟢 agent fonctionnel (service Windows, WMI `MSFT_MpComputerStatus`, token DPAPI) ; reste validation end-to-end sur serveur déployé |
 | M2 Agent Defender complet | 🟢 implémenté (état + menaces WMI, scans/MAJ PowerShell, config YAML/registre, file locale/back-off) ; reste DoD end-to-end sur poste réel |
 | M3 Backend complet | 🟢 commandes (broadcast par filtre + suivi + expiration), stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, `is_up_to_date` calculé, pool DB configurable ; tests verts sur Postgres |
-| M4 Console | 🟡 liste des postes seule |
+| M4 Console | 🟢 login JWT + dashboard KPI/alertes + filtres + détail poste + actions de masse + révocation ; reste l'action de fusion de postes (endpoint backend à créer) |
 | M5 Durcissement | 🟡 JWT + rôles, provider Mailgun ; reste audit, jobs ARQ branchés, rotation, rate-limit |
 | M6 Packaging & GPO | ⬜ à faire |
 | Transverse | 🟢 tests backend/frontend + ruff + mypy + CI (tous verts) |
@@ -400,9 +401,14 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Révocation de token (`POST /machines/{id}/revoke-token`, kill-switch) + ré-enrôlement
 - [x] Calcul de `is_up_to_date` au heartbeat (AV+RTP+âge signatures) ; pool DB (psycopg) configurable
 
-**M4 — Console** · 🟡 partiel
-- [x] Liste des postes (squelette)
-- [ ] Dashboard KPI, vue détail poste, actions de masse, fusion de postes (`needs_verification`)
+**M4 — Console** · 🟢 implémenté
+- [x] Authentification console (login JWT, store Pinia, interceptor Bearer + redirection sur 401, guard de route)
+- [x] Dashboard : cartes KPI (`/stats/overview`) + listes d'alertes (postes non à jour, menaces actives)
+- [x] Liste des postes : recherche (nom/UUID), filtres domaine + statut, lien vers le détail
+- [x] Vue détail poste : identité + état Defender complet, historique menaces, dernières commandes, bannière `needs_verification`
+- [x] Sélection multiple → actions de masse (scan rapide/complet, MAJ signatures) + révocation de token, avec retour `Notify`
+- [ ] Action de **fusion de postes** (`needs_verification`) : signalée dans l'UI, mais l'action elle-même attend un endpoint backend de merge
+- [x] Détail backend enrichi (`MachineDetailOut`) + services frontend testés (vitest, couverture 100 % sur `src/services`)
 
 **M5 — Durcissement** · 🟡 partiel (anticipé)
 - [x] Auth console JWT + rôles `admin` / `readonly` (permissions `(ressource, action)`)

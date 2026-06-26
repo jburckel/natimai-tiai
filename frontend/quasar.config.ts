@@ -2,7 +2,7 @@ import { defineConfig } from '#q-app/wrappers';
 
 export default defineConfig(() => {
   return {
-    boot: ['axios'],
+    boot: ['pinia', 'axios'],
     css: ['app.scss'],
     extras: ['material-icons'],
 
@@ -25,7 +25,7 @@ export default defineConfig(() => {
     },
 
     framework: {
-      plugins: ['Notify'],
+      plugins: ['Notify', 'Dialog'],
     },
   };
 });

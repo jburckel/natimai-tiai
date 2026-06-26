@@ -1,0 +1,233 @@
+<template>
+  <q-page padding>
+    <div class="row items-center q-mb-md">
+      <q-btn flat dense round icon="arrow_back" :to="{ name: 'machines' }" class="q-mr-sm" />
+      <div class="text-h5">{{ title }}</div>
+      <q-space />
+      <q-btn-dropdown color="primary" dense label="Action" icon="bolt" :disable="!machine">
+        <q-list>
+          <q-item
+            v-for="action in actions"
+            :key="action.type"
+            v-close-popup
+            clickable
+            @click="runOne(action.type)"
+          >
+            <q-item-section avatar><q-icon :name="action.icon" /></q-item-section>
+            <q-item-section>{{ action.label }}</q-item-section>
+          </q-item>
+        </q-list>
+      </q-btn-dropdown>
+      <q-btn
+        flat
+        dense
+        color="negative"
+        icon="key_off"
+        label="Révoquer le token"
+        class="q-ml-sm"
+        :disable="!machine"
+        @click="confirmRevoke"
+      />
+    </div>
+
+    <q-banner v-if="machine?.needs_verification" class="bg-orange-2 q-mb-md" rounded>
+      <template #avatar><q-icon name="warning" color="orange" /></template>
+      Empreinte divergente : ce poste nécessite une vérification manuelle (clone, swap matériel ou
+      ré-image).
+    </q-banner>
+
+    <div class="row q-col-gutter-md">
+      <div class="col-12 col-md-6">
+        <q-card flat bordered>
+          <q-card-section class="text-subtitle1">Identité</q-card-section>
+          <q-separator />
+          <q-list dense>
+            <q-item v-for="r in identityRows" :key="r.label">
+              <q-item-section>{{ r.label }}</q-item-section>
+              <q-item-section side class="text-black">{{ r.value }}</q-item-section>
+            </q-item>
+          </q-list>
+        </q-card>
+      </div>
+
+      <div class="col-12 col-md-6">
+        <q-card flat bordered>
+          <q-card-section class="text-subtitle1">État Defender</q-card-section>
+          <q-separator />
+          <q-list dense>
+            <q-item v-for="r in defenderRows" :key="r.label">
+              <q-item-section>{{ r.label }}</q-item-section>
+              <q-item-section side class="text-black">{{ r.value }}</q-item-section>
+            </q-item>
+          </q-list>
+        </q-card>
+      </div>
+    </div>
+
+    <q-card flat bordered class="q-mt-md">
+      <q-card-section class="text-subtitle1">Historique des menaces</q-card-section>
+      <q-separator />
+      <q-table
+        :rows="threats"
+        :columns="threatColumns"
+        row-key="id"
+        :loading="loading"
+        flat
+        :rows-per-page-options="[10, 25, 50]"
+        no-data-label="Aucune menace détectée."
+      >
+        <template #body-cell-detected_at="props">
+          <q-td :props="props">{{ formatDateTime(props.value) }}</q-td>
+        </template>
+      </q-table>
+    </q-card>
+
+    <q-card flat bordered class="q-mt-md">
+      <q-card-section class="text-subtitle1">Dernières commandes</q-card-section>
+      <q-separator />
+      <q-table
+        :rows="commands"
+        :columns="commandColumns"
+        row-key="id"
+        :loading="loading"
+        flat
+        :rows-per-page-options="[10, 25, 50]"
+        no-data-label="Aucune commande."
+      >
+        <template #body-cell-created_at="props">
+          <q-td :props="props">{{ formatDateTime(props.value) }}</q-td>
+        </template>
+        <template #body-cell-finished_at="props">
+          <q-td :props="props">{{ formatDateTime(props.value) }}</q-td>
+        </template>
+      </q-table>
+    </q-card>
+  </q-page>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import { useQuasar, type QTableColumn } from 'quasar';
+import { getMachine, revokeToken, type MachineDetail } from 'src/services/machines';
+import { listThreats, type Threat } from 'src/services/threats';
+import {
+  createCommands,
+  listCommands,
+  type Command,
+  type CommandType,
+} from 'src/services/commands';
+import { boolLabel, formatDateTime } from 'src/utils/format';
+
+const props = defineProps<{ id: string }>();
+const $q = useQuasar();
+
+const machine = ref<MachineDetail | null>(null);
+const threats = ref<Threat[]>([]);
+const commands = ref<Command[]>([]);
+const loading = ref(false);
+
+const actions: { type: CommandType; label: string; icon: string }[] = [
+  { type: 'quick_scan', label: 'Scan rapide', icon: 'bolt' },
+  { type: 'full_scan', label: 'Scan complet', icon: 'travel_explore' },
+  { type: 'update_signatures', label: 'Mise à jour signatures', icon: 'sync' },
+];
+
+const title = computed(() => machine.value?.hostname || machine.value?.machine_uuid || 'Poste');
+
+const identityRows = computed(() =>
+  machine.value
+    ? [
+        { label: 'Nom', value: machine.value.hostname ?? '—' },
+        { label: 'UUID machine', value: machine.value.machine_uuid },
+        { label: 'Domaine', value: machine.value.domain ?? '—' },
+        { label: 'OS', value: machine.value.os_version ?? '—' },
+        { label: 'Version agent', value: machine.value.agent_version ?? '—' },
+        { label: 'SMBIOS UUID', value: machine.value.smbios_uuid ?? '—' },
+        { label: 'MachineGuid', value: machine.value.machine_guid ?? '—' },
+        { label: 'Vu le', value: formatDateTime(machine.value.last_seen) },
+      ]
+    : [],
+);
+
+const defenderRows = computed(() =>
+  machine.value
+    ? [
+        { label: 'Antivirus actif', value: boolLabel(machine.value.av_enabled) },
+        { label: 'Protection temps réel', value: boolLabel(machine.value.rtp_enabled) },
+        { label: 'À jour', value: boolLabel(machine.value.is_up_to_date) },
+        { label: 'Version signatures', value: machine.value.signature_version ?? '—' },
+        {
+          label: 'Signatures à jour le',
+          value: formatDateTime(machine.value.signature_last_updated),
+        },
+        { label: 'Âge signatures (j)', value: machine.value.signature_age_days ?? '—' },
+        { label: 'Dernier scan rapide', value: formatDateTime(machine.value.last_quick_scan) },
+        { label: 'Dernier scan complet', value: formatDateTime(machine.value.last_full_scan) },
+      ]
+    : [],
+);
+
+const threatColumns: QTableColumn<Threat>[] = [
+  { name: 'threat_name', label: 'Menace', field: 'threat_name', align: 'left' },
+  { name: 'severity', label: 'Sévérité', field: 'severity', align: 'left' },
+  { name: 'status', label: 'Statut', field: 'status', align: 'left' },
+  { name: 'detected_at', label: 'Détectée le', field: 'detected_at', align: 'left' },
+];
+
+const commandColumns: QTableColumn<Command>[] = [
+  { name: 'type', label: 'Type', field: 'type', align: 'left' },
+  { name: 'status', label: 'Statut', field: 'status', align: 'left' },
+  { name: 'created_by', label: 'Par', field: 'created_by', align: 'left' },
+  { name: 'created_at', label: 'Créée le', field: 'created_at', align: 'left' },
+  { name: 'finished_at', label: 'Terminée le', field: 'finished_at', align: 'left' },
+];
+
+async function load() {
+  loading.value = true;
+  try {
+    const [m, t, c] = await Promise.all([
+      getMachine(props.id),
+      listThreats({ machine_id: props.id }),
+      listCommands({ machine_id: props.id }),
+    ]);
+    machine.value = m;
+    threats.value = t.items;
+    commands.value = c.items;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function runOne(type: CommandType) {
+  try {
+    await createCommands({ type, machine_ids: [props.id] });
+    $q.notify({ type: 'positive', message: 'Commande envoyée' });
+    await load();
+  } catch {
+    $q.notify({ type: 'negative', message: "Échec de l'envoi de la commande" });
+  }
+}
+
+function confirmRevoke() {
+  $q.dialog({
+    title: 'Révoquer le token',
+    message: 'Le poste devra se ré-enrôler. Continuer ?',
+    cancel: true,
+    persistent: true,
+  }).onOk(() => {
+    void doRevoke();
+  });
+}
+
+async function doRevoke() {
+  try {
+    await revokeToken(props.id);
+    $q.notify({ type: 'positive', message: 'Token révoqué' });
+    await load();
+  } catch {
+    $q.notify({ type: 'negative', message: 'Échec de la révocation' });
+  }
+}
+
+onMounted(load);
+</script>

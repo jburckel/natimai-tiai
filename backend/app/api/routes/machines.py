@@ -42,6 +42,23 @@ class MachineOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MachineDetailOut(MachineOut):
+    """Full machine detail (Defender state, fingerprint, timestamps)."""
+
+    rtp_enabled: bool | None
+    av_enabled: bool | None
+    signature_last_updated: datetime | None
+    signature_age_days: int | None
+    last_quick_scan: datetime | None
+    last_full_scan: datetime | None
+    machine_guid: str | None
+    smbios_uuid: str | None
+    tpm_ek_hash: str | None
+    first_seen: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
 class MachineList(BaseModel):
     """Paginated machine list."""
 
@@ -85,13 +102,13 @@ async def list_machines(
     return MachineList(items=items, total=total or 0, page=page, page_size=page_size)
 
 
-@router.get("/{machine_id}", response_model=MachineOut)
-async def get_machine(machine_id: uuid.UUID, session: SessionDep) -> MachineOut:
-    """Fetch a single machine by id."""
+@router.get("/{machine_id}", response_model=MachineDetailOut)
+async def get_machine(machine_id: uuid.UUID, session: SessionDep) -> MachineDetailOut:
+    """Fetch a single machine by id (full Defender state + fingerprint)."""
     machine = await session.get(Machine, machine_id)
     if machine is None:
         raise HTTPException(status_code=404, detail="Machine not found")
-    return MachineOut.model_validate(machine)
+    return MachineDetailOut.model_validate(machine)
 
 
 @router.post(

@@ -267,3 +267,29 @@ async def test_revoke_token_blocks_agent(client, db_session):
     # Re-enrollment issues a fresh token and clears the flag.
     re = await _enroll(client, "m-revoke")
     assert (await _heartbeat(client, re["token"])).status_code == 200
+
+
+async def test_machine_detail_exposes_defender_state(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    enrolled = await _enroll(client, "m-detail")
+    await _heartbeat(
+        client,
+        enrolled["token"],
+        defender={
+            "av_enabled": True,
+            "rtp_enabled": True,
+            "signature_version": "1.400.1.0",
+            "signature_age_days": 2,
+        },
+    )
+
+    resp = await client.get(
+        f"/api/v1/machines/{enrolled['machine_id']}", headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # Fields present only on the detail view (not the lean list row).
+    assert body["av_enabled"] is True
+    assert body["rtp_enabled"] is True
+    assert body["signature_age_days"] == 2
+    assert "last_quick_scan" in body and "created_at" in body
