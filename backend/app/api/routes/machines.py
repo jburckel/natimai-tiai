@@ -6,14 +6,16 @@ Auth (admin session/JWT) is added in M5; left open for the MVP.
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlmodel import col, select
 
 from app.api.deps import SessionDep, require_permission
 from app.core.config import settings
+from app.core.errors import AppError, ErrorCode
 from app.features.base import utcnow
+from app.features.machine import crud as machine_crud
 from app.features.machine.models import Machine
 from app.features.machine.status import MachineStatus, status_clause
 from app.features.user.permissions import Action, Resource
@@ -102,13 +104,42 @@ async def list_machines(
     return MachineList(items=items, total=total or 0, page=page, page_size=page_size)
 
 
+async def _require_machine(session: SessionDep, machine_id: uuid.UUID) -> Machine:
+    """Fetch a machine or raise the stable not-found error."""
+    machine = await session.get(Machine, machine_id)
+    if machine is None:
+        raise AppError(
+            code=ErrorCode.MACHINE_NOT_FOUND,
+            status_code=404,
+            message="Machine not found",
+        )
+    return machine
+
+
 @router.get("/{machine_id}", response_model=MachineDetailOut)
 async def get_machine(machine_id: uuid.UUID, session: SessionDep) -> MachineDetailOut:
     """Fetch a single machine by id (full Defender state + fingerprint)."""
-    machine = await session.get(Machine, machine_id)
-    if machine is None:
-        raise HTTPException(status_code=404, detail="Machine not found")
+    machine = await _require_machine(session, machine_id)
     return MachineDetailOut.model_validate(machine)
+
+
+@router.get("/{machine_id}/duplicates", response_model=list[MachineOut])
+async def list_duplicates(
+    machine_id: uuid.UUID, session: SessionDep
+) -> list[MachineOut]:
+    """Candidate duplicates: other machines sharing this one's SMBIOS anchor
+    (plan §2.3) — the records an admin may want to merge.
+    """
+    machine = await _require_machine(session, machine_id)
+    if not machine.smbios_uuid:
+        return []
+    rows = await session.exec(
+        select(Machine)
+        .where(col(Machine.smbios_uuid) == machine.smbios_uuid)
+        .where(col(Machine.id) != machine_id)
+        .order_by(col(Machine.last_seen).desc())
+    )
+    return [MachineOut.model_validate(m) for m in rows.all()]
 
 
 @router.post(
@@ -119,10 +150,40 @@ async def revoke_token(machine_id: uuid.UUID, session: SessionDep) -> dict[str, 
     """Revoke a machine's token (kill-switch): its next call is rejected and it
     must re-enroll, which issues a fresh token and clears the flag (plan §2.4).
     """
-    machine = await session.get(Machine, machine_id)
-    if machine is None:
-        raise HTTPException(status_code=404, detail="Machine not found")
+    machine = await _require_machine(session, machine_id)
     machine.token_revoked = True
     machine.updated_at = utcnow()
     await session.commit()
     return {"status": "revoked"}
+
+
+class MergeRequest(BaseModel):
+    """Merge the ``source`` machine into the path's target (kept) machine."""
+
+    source_id: uuid.UUID
+
+
+@router.post(
+    "/{machine_id}/merge",
+    response_model=MachineDetailOut,
+    dependencies=[Depends(require_permission(Resource.MACHINE, Action.WRITE))],
+)
+async def merge_machine(
+    machine_id: uuid.UUID, payload: MergeRequest, session: SessionDep
+) -> MachineDetailOut:
+    """Merge a duplicate record into this one (plan §8): the source's threats
+    and commands are reattached here, the verification flag is cleared, and the
+    source is deleted. This machine (the path id) is the one kept.
+    """
+    if machine_id == payload.source_id:
+        raise AppError(
+            code=ErrorCode.MACHINE_MERGE_SELF,
+            status_code=400,
+            message="Cannot merge a machine into itself",
+        )
+    target = await _require_machine(session, machine_id)
+    source = await _require_machine(session, payload.source_id)
+    await machine_crud.merge_into(session, target=target, source=source)
+    await session.commit()
+    await session.refresh(target)
+    return MachineDetailOut.model_validate(target)

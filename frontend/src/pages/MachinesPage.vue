@@ -92,6 +92,7 @@ import { useRouter } from 'vue-router';
 import { useQuasar, type QTableColumn } from 'quasar';
 import { listMachines, type Machine, type MachineStatus } from 'src/services/machines';
 import { createCommands, type CommandType } from 'src/services/commands';
+import { apiErrorMessage } from 'src/services/errors';
 import { formatDateTime } from 'src/utils/format';
 
 const $q = useQuasar();
@@ -158,8 +159,8 @@ async function runBulk(type: CommandType) {
     const res = await createCommands({ type, machine_ids: ids });
     $q.notify({ type: 'positive', message: `${res.count} commande(s) envoyée(s)` });
     selected.value = [];
-  } catch {
-    $q.notify({ type: 'negative', message: "Échec de l'envoi des commandes" });
+  } catch (e) {
+    $q.notify({ type: 'negative', message: apiErrorMessage(e, "Échec de l'envoi des commandes") });
   }
 }
 

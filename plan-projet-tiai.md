@@ -147,7 +147,7 @@ Les erreurs API suivent un **contrat partagé** entre backend et frontend (comme
 - **Centralisé** : une exception applicative `AppError(code, status_code, message, details)` + des *exception handlers* enregistrés produisent l'enveloppe de façon uniforme ; les 500 **masquent les détails** hors environnement local.
 - **Source unique des codes** : maintenir la liste des codes côté backend et la **refléter côté frontend** (table de correspondance code → message), pour éviter la divergence.
 
-État actuel : le backend utilise encore `HTTPException(detail=...)` (texte libre) → **à migrer** vers `AppError` + handlers avant d'étoffer la console (M4) ; à cadrer côté frontend avec l'i18n.
+État actuel : **migré** ✅. Le backend lève des `AppError(code, status_code, message, details)` ([app/core/errors.py](backend/app/core/errors.py)) ; quatre handlers (AppError, validation 422, HTTPException framework, 500 masqué hors `local`) produisent l'enveloppe `{"error": {code, message, details}}`. Catalogue stable `ErrorCode` côté backend, reflété côté frontend ([frontend/src/services/errors.ts](frontend/src/services/errors.ts)) en table `code → message` (FR) consommée par les pages via `apiErrorMessage`. Reste : une vraie lib i18n (vue-i18n) si le multilingue devient nécessaire.
 
 ---
 
@@ -354,7 +354,9 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 
 **Instantané — 2026-06-26** · Phase 1 (Defender). Agent Defender complet (M2) implémenté : WMI (état + menaces), PowerShell (scans/MAJ), identité réelle (SMBIOS/MachineGuid), DPAPI, service Windows, file locale + back-off. Validé sur poste réel (identité/WMI/sysinfo) ; reste la boucle end-to-end API→scan→résultat contre un serveur déployé. Tests Go de logique pure + builds Windows/Linux verts.
 > Backend complet (M3) implémenté : broadcast de commandes par filtre + suivi + expiration, stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, calcul `is_up_to_date`, pool DB configurable. 34 tests backend verts sur Postgres (ruff + mypy OK).
-> Console (M4) implémentée : login JWT (store Pinia + interceptor + guard), dashboard KPI/alertes, filtres postes, vue détail (état Defender + menaces + commandes), actions de masse, révocation. Typecheck + build SPA OK, 12 tests vitest (couverture 100 % services). Reste : migration `HTTPException` → `AppError` (§2.14) + i18n, et l'endpoint de fusion de postes.
+> Console (M4) implémentée : login JWT (store Pinia + interceptor + guard), dashboard KPI/alertes, filtres postes, vue détail (état Defender + menaces + commandes), actions de masse, révocation. Typecheck + build SPA OK, 18 tests vitest (couverture 100 % services).
+> Contrat d'erreurs (§2.14) **migré** : `AppError` + handlers (enveloppe stable), catalogue `ErrorCode` reflété côté frontend (`errors.ts`) et consommé par les pages.
+> Fusion de postes (§8) **implémentée** : merge backend (rattachement menaces/commandes + dédup + suppression du doublon) + découverte des doublons par SMBIOS + dialog UI. **46 tests backend** (dont 8 de contrat + 4 de fusion) + **20 vitest** (couverture 100 % services) verts ; ruff/mypy/typecheck/build SPA OK. Phase 1 backend + console fonctionnellement complètes ; reste M6 (packaging/GPO) et la validation end-to-end sur stack déployée.
 
 | Jalon | État |
 |---|---|
@@ -362,7 +364,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 | M1 Tranche verticale | 🟢 agent fonctionnel (service Windows, WMI `MSFT_MpComputerStatus`, token DPAPI) ; reste validation end-to-end sur serveur déployé |
 | M2 Agent Defender complet | 🟢 implémenté (état + menaces WMI, scans/MAJ PowerShell, config YAML/registre, file locale/back-off) ; reste DoD end-to-end sur poste réel |
 | M3 Backend complet | 🟢 commandes (broadcast par filtre + suivi + expiration), stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, `is_up_to_date` calculé, pool DB configurable ; tests verts sur Postgres |
-| M4 Console | 🟢 login JWT + dashboard KPI/alertes + filtres + détail poste + actions de masse + révocation ; reste l'action de fusion de postes (endpoint backend à créer) |
+| M4 Console | 🟢 login JWT + dashboard KPI/alertes + filtres + détail poste + actions de masse + révocation + fusion de postes |
 | M5 Durcissement | 🟡 JWT + rôles, provider Mailgun ; reste audit, jobs ARQ branchés, rotation, rate-limit |
 | M6 Packaging & GPO | ⬜ à faire |
 | Transverse | 🟢 tests backend/frontend + ruff + mypy + CI (tous verts) |
@@ -407,7 +409,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Liste des postes : recherche (nom/UUID), filtres domaine + statut, lien vers le détail
 - [x] Vue détail poste : identité + état Defender complet, historique menaces, dernières commandes, bannière `needs_verification`
 - [x] Sélection multiple → actions de masse (scan rapide/complet, MAJ signatures) + révocation de token, avec retour `Notify`
-- [ ] Action de **fusion de postes** (`needs_verification`) : signalée dans l'UI, mais l'action elle-même attend un endpoint backend de merge
+- [x] **Fusion de postes** (`needs_verification`, plan §8) : backend `POST /machines/{id}/merge` (rattache menaces + commandes, dédup `detection_id`, lève le flag, supprime le doublon) + `GET /machines/{id}/duplicates` (même SMBIOS) ; UI = dialog de fusion sur la vue détail
 - [x] Détail backend enrichi (`MachineDetailOut`) + services frontend testés (vitest, couverture 100 % sur `src/services`)
 
 **M5 — Durcissement** · 🟡 partiel (anticipé)
@@ -423,7 +425,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Qualité backend : `ruff format` + `ruff check` + `mypy --strict` (verts)
 - [x] Formatage frontend : `prettier`
 - [x] CI GitHub Actions (backend : uv + ruff + mypy + pytest avec Postgres ; frontend : prettier + vitest)
-- [ ] Contrat d'erreurs API (`AppError` + handlers, `code` stable ↔ i18n frontend) — à migrer depuis `HTTPException` (cf. §2.14)
+- [x] Contrat d'erreurs API (`AppError` + handlers, enveloppe `{error:{code,message,details}}`, catalogue `ErrorCode` reflété côté frontend `errors.ts`) — migré depuis `HTTPException` (cf. §2.14), testé (8 tests backend de contrat + 6 frontend)
 
 ---
 

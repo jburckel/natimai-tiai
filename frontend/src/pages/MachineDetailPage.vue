@@ -21,6 +21,16 @@
       <q-btn
         flat
         dense
+        color="primary"
+        icon="merge"
+        label="Fusionner"
+        class="q-ml-sm"
+        :disable="!machine"
+        @click="openMerge"
+      />
+      <q-btn
+        flat
+        dense
         color="negative"
         icon="key_off"
         label="Révoquer le token"
@@ -34,6 +44,9 @@
       <template #avatar><q-icon name="warning" color="orange" /></template>
       Empreinte divergente : ce poste nécessite une vérification manuelle (clone, swap matériel ou
       ré-image).
+      <template #action>
+        <q-btn flat dense label="Fusionner un doublon" @click="openMerge" />
+      </template>
     </q-banner>
 
     <div class="row q-col-gutter-md">
@@ -102,13 +115,50 @@
         </template>
       </q-table>
     </q-card>
+
+    <q-dialog v-model="mergeOpen">
+      <q-card style="min-width: 420px; max-width: 90vw">
+        <q-card-section class="text-h6">Fusionner un doublon</q-card-section>
+        <q-card-section class="q-pt-none text-caption text-grey">
+          Le poste choisi sera fusionné dans <b>{{ title }}</b> (conservé) : ses menaces et
+          commandes y seront rattachées, puis il sera supprimé.
+        </q-card-section>
+        <q-separator />
+        <q-list separator>
+          <q-item v-for="d in duplicates" :key="d.id">
+            <q-item-section>
+              <q-item-label>{{ d.hostname || d.machine_uuid }}</q-item-label>
+              <q-item-label caption>Vu le {{ formatDateTime(d.last_seen) }}</q-item-label>
+            </q-item-section>
+            <q-item-section side>
+              <q-btn dense color="primary" label="Fusionner ici" @click="doMerge(d)" />
+            </q-item-section>
+          </q-item>
+          <q-item v-if="!duplicates.length">
+            <q-item-section class="text-grey">
+              Aucun doublon détecté (même SMBIOS UUID).
+            </q-item-section>
+          </q-item>
+        </q-list>
+        <q-card-actions align="right">
+          <q-btn v-close-popup flat label="Fermer" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useQuasar, type QTableColumn } from 'quasar';
-import { getMachine, revokeToken, type MachineDetail } from 'src/services/machines';
+import {
+  getDuplicates,
+  getMachine,
+  mergeMachines,
+  revokeToken,
+  type Machine,
+  type MachineDetail,
+} from 'src/services/machines';
 import { listThreats, type Threat } from 'src/services/threats';
 import {
   createCommands,
@@ -116,6 +166,7 @@ import {
   type Command,
   type CommandType,
 } from 'src/services/commands';
+import { apiErrorMessage } from 'src/services/errors';
 import { boolLabel, formatDateTime } from 'src/utils/format';
 
 const props = defineProps<{ id: string }>();
@@ -125,6 +176,8 @@ const machine = ref<MachineDetail | null>(null);
 const threats = ref<Threat[]>([]);
 const commands = ref<Command[]>([]);
 const loading = ref(false);
+const mergeOpen = ref(false);
+const duplicates = ref<Machine[]>([]);
 
 const actions: { type: CommandType; label: string; icon: string }[] = [
   { type: 'quick_scan', label: 'Scan rapide', icon: 'bolt' },
@@ -203,8 +256,8 @@ async function runOne(type: CommandType) {
     await createCommands({ type, machine_ids: [props.id] });
     $q.notify({ type: 'positive', message: 'Commande envoyée' });
     await load();
-  } catch {
-    $q.notify({ type: 'negative', message: "Échec de l'envoi de la commande" });
+  } catch (e) {
+    $q.notify({ type: 'negative', message: apiErrorMessage(e, "Échec de l'envoi de la commande") });
   }
 }
 
@@ -224,8 +277,42 @@ async function doRevoke() {
     await revokeToken(props.id);
     $q.notify({ type: 'positive', message: 'Token révoqué' });
     await load();
-  } catch {
-    $q.notify({ type: 'negative', message: 'Échec de la révocation' });
+  } catch (e) {
+    $q.notify({ type: 'negative', message: apiErrorMessage(e, 'Échec de la révocation') });
+  }
+}
+
+async function openMerge() {
+  try {
+    duplicates.value = await getDuplicates(props.id);
+    mergeOpen.value = true;
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: apiErrorMessage(e, 'Échec du chargement des doublons'),
+    });
+  }
+}
+
+function doMerge(source: Machine) {
+  $q.dialog({
+    title: 'Fusionner les postes',
+    message: `Fusionner « ${source.hostname || source.machine_uuid} » dans ce poste ? Cette action est irréversible.`,
+    cancel: true,
+    persistent: true,
+  }).onOk(() => {
+    void runMerge(source.id);
+  });
+}
+
+async function runMerge(sourceId: string) {
+  try {
+    await mergeMachines(props.id, sourceId);
+    $q.notify({ type: 'positive', message: 'Postes fusionnés' });
+    mergeOpen.value = false;
+    await load();
+  } catch (e) {
+    $q.notify({ type: 'negative', message: apiErrorMessage(e, 'Échec de la fusion') });
   }
 }
 

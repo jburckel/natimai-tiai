@@ -47,6 +47,7 @@ import { ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useQuasar } from 'quasar';
 import { useAuthStore } from 'src/stores/auth';
+import { apiErrorMessage } from 'src/services/errors';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -65,8 +66,8 @@ async function onSubmit() {
     await auth.login(email.value, password.value);
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/';
     await router.push(redirect);
-  } catch {
-    $q.notify({ type: 'negative', message: 'Identifiants invalides' });
+  } catch (e) {
+    $q.notify({ type: 'negative', message: apiErrorMessage(e, 'Identifiants invalides') });
   } finally {
     loading.value = false;
   }

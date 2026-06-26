@@ -58,3 +58,17 @@ export async function getMachine(id: string): Promise<MachineDetail> {
 export async function revokeToken(id: string): Promise<void> {
   await api.post(`/machines/${id}/revoke-token`);
 }
+
+/** Candidate duplicates of a machine (others sharing its SMBIOS anchor). */
+export async function getDuplicates(id: string): Promise<Machine[]> {
+  const { data } = await api.get<Machine[]>(`/machines/${id}/duplicates`);
+  return data;
+}
+
+/** Merge `sourceId` into `targetId` (kept); returns the updated target. */
+export async function mergeMachines(targetId: string, sourceId: string): Promise<MachineDetail> {
+  const { data } = await api.post<MachineDetail>(`/machines/${targetId}/merge`, {
+    source_id: sourceId,
+  });
+  return data;
+}

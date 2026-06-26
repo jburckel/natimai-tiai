@@ -293,3 +293,106 @@ async def test_machine_detail_exposes_defender_state(client, db_session):
     assert body["rtp_enabled"] is True
     assert body["signature_age_days"] == 2
     assert "last_quick_scan" in body and "created_at" in body
+
+
+# --- Machine merge (plan §8) -----------------------------------------------
+
+
+async def test_duplicates_lists_same_smbios(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    a = await _enroll(client, "dup-a", fingerprint={"smbios_uuid": "SMB-DUP"})
+    await _enroll(client, "dup-b", fingerprint={"smbios_uuid": "SMB-DUP"})
+    await _enroll(client, "dup-c", fingerprint={"smbios_uuid": "SMB-OTHER"})
+
+    resp = await client.get(
+        f"/api/v1/machines/{a['machine_id']}/duplicates", headers=headers
+    )
+    assert resp.status_code == 200
+    assert [m["machine_uuid"] for m in resp.json()] == ["dup-b"]
+
+
+async def test_merge_reassigns_history_and_clears_flag(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    a = await _enroll(client, "m-merge-a", fingerprint={"smbios_uuid": "SMB-MERGE"})
+    b = await _enroll(client, "m-merge-b", fingerprint={"smbios_uuid": "SMB-MERGE"})
+
+    # B (a second identity on the same anchor) is flagged for verification.
+    detail_b = await client.get(f"/api/v1/machines/{b['machine_id']}", headers=headers)
+    assert detail_b.json()["needs_verification"] is True
+
+    # A has a threat and a queued command.
+    await _heartbeat(
+        client,
+        a["token"],
+        threats=[{"detection_id": "DA", "threat_name": "X", "status": "active"}],
+    )
+    cmd = await client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"type": "quick_scan", "machine_ids": [a["machine_id"]]},
+    )
+    assert cmd.json()["count"] == 1
+
+    # Merge A into B (keep B).
+    merged = await client.post(
+        f"/api/v1/machines/{b['machine_id']}/merge",
+        headers=headers,
+        json={"source_id": a["machine_id"]},
+    )
+    assert merged.status_code == 200
+    assert merged.json()["needs_verification"] is False
+
+    # A is gone; its history now belongs to B.
+    gone = await client.get(f"/api/v1/machines/{a['machine_id']}", headers=headers)
+    assert gone.status_code == 404
+    threats_b = await client.get(
+        f"/api/v1/threats?machine_id={b['machine_id']}", headers=headers
+    )
+    assert [t["detection_id"] for t in threats_b.json()["items"]] == ["DA"]
+    cmds_b = await client.get(
+        f"/api/v1/commands?machine_id={b['machine_id']}", headers=headers
+    )
+    assert cmds_b.json()["total"] == 1
+
+
+async def test_merge_dedups_colliding_threats(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    a = await _enroll(client, "mt-a", fingerprint={"smbios_uuid": "SMB-MT"})
+    b = await _enroll(client, "mt-b", fingerprint={"smbios_uuid": "SMB-MT"})
+
+    # Both report the same detection id.
+    await _heartbeat(
+        client,
+        a["token"],
+        threats=[{"detection_id": "DUP", "threat_name": "from-A", "status": "active"}],
+    )
+    await _heartbeat(
+        client,
+        b["token"],
+        threats=[{"detection_id": "DUP", "threat_name": "from-B", "status": "active"}],
+    )
+
+    await client.post(
+        f"/api/v1/machines/{b['machine_id']}/merge",
+        headers=headers,
+        json={"source_id": a["machine_id"]},
+    )
+
+    threats_b = await client.get(
+        f"/api/v1/threats?machine_id={b['machine_id']}", headers=headers
+    )
+    items = threats_b.json()["items"]
+    assert len(items) == 1  # collision dropped; the target's row is kept
+    assert items[0]["threat_name"] == "from-B"
+
+
+async def test_merge_into_self_rejected(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    a = await _enroll(client, "merge-self")
+    resp = await client.post(
+        f"/api/v1/machines/{a['machine_id']}/merge",
+        headers=headers,
+        json={"source_id": a["machine_id"]},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "machine.merge.self"

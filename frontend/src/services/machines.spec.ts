@@ -6,7 +6,7 @@ vi.mock('boot/axios', () => ({
 }));
 
 import { api } from 'boot/axios';
-import { getMachine, listMachines, revokeToken } from './machines';
+import { getDuplicates, getMachine, listMachines, mergeMachines, revokeToken } from './machines';
 
 describe('listMachines', () => {
   beforeEach(() => {
@@ -63,5 +63,39 @@ describe('revokeToken', () => {
     await revokeToken('m-9');
 
     expect(api.post).toHaveBeenCalledWith('/machines/m-9/revoke-token');
+  });
+});
+
+describe('getDuplicates', () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+  });
+
+  it('fetches duplicate candidates for a machine', async () => {
+    const dups = [{ id: 'm-2' }];
+    vi.mocked(api.get).mockResolvedValue({ data: dups });
+
+    const result = await getDuplicates('m-1');
+
+    expect(api.get).toHaveBeenCalledWith('/machines/m-1/duplicates');
+    expect(result).toEqual(dups);
+  });
+});
+
+describe('mergeMachines', () => {
+  beforeEach(() => {
+    vi.mocked(api.post).mockReset();
+  });
+
+  it('merges the source into the target and returns the updated target', async () => {
+    const target = { id: 'm-keep', needs_verification: false };
+    vi.mocked(api.post).mockResolvedValue({ data: target });
+
+    const result = await mergeMachines('m-keep', 'm-drop');
+
+    expect(api.post).toHaveBeenCalledWith('/machines/m-keep/merge', {
+      source_id: 'm-drop',
+    });
+    expect(result).toEqual(target);
   });
 });
