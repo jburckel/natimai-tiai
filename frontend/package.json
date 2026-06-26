@@ -12,6 +12,7 @@
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "format": "prettier --write \"**/*.{ts,js,vue,json,scss,css,html,md}\"",
     "format:check": "prettier --check \"**/*.{ts,js,vue,json,scss,css,html,md}\"",
     "postinstall": "quasar prepare"
@@ -27,6 +28,7 @@
   "devDependencies": {
     "@quasar/app-vite": "^2.0.0",
     "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
     "@vue/test-utils": "^2.4.0",
     "jsdom": "^25.0.0",
     "prettier": "^3.3.0",

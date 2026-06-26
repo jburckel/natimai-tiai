@@ -1,5 +1,9 @@
 # Tiai
 
+[![CI](https://github.com/Natimai-Solutions/natimai-tiai/actions/workflows/ci.yml/badge.svg)](https://github.com/jburckel/natimai-tiai/actions/workflows/ci.yml)
+[![Couverture backend](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jburckel/80b72bc52448a36bc1a08370a68c88a1/raw/tiai-coverage-backend.json)](https://github.com/Natimai-Solutions/natimai-tiai/actions/workflows/ci.yml)
+[![Couverture frontend](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jburckel/80b72bc52448a36bc1a08370a68c88a1/raw/tiai-coverage-frontend.json)](https://github.com/jburckel/Natimai-Solutions/actions/workflows/ci.yml)
+
 > **Console de gestion de parc informatique** — pilotage centralisé d'un parc de postes Windows.
 >
 > *« Tīa'i »* — en reo tahiti : *gardien, vigile, garder, protéger.*
@@ -157,6 +161,25 @@ Pour le développement backend/frontend hors Docker, voir leurs README respectif
 Points permanents : binaire agent **signé** (certificat de l'AC interne), validation stricte des entrées API, limitation de débit côté agent pour éviter l'effet « troupeau ».
 
 Pour signaler une vulnérabilité, contactez l'équipe sécurité de Natimai plutôt que d'ouvrir une issue publique.
+
+## Tests & couverture
+
+La CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) tourne à chaque push sur `main` et sur chaque PR :
+
+- **Backend** : `ruff format` + `ruff check` + `mypy --strict` + `pytest` **sous couverture** (service PostgreSQL pour les tests d'API). Seuil `fail_under` dans [backend/pyproject.toml](backend/pyproject.toml) — le build échoue en dessous.
+- **Frontend** : `prettier --check` + `vitest run --coverage` (cadré sur `src/services`, à élargir au fil des tests).
+- **PR** : un commentaire de couverture est posté automatiquement (backend + frontend).
+
+```bash
+# Backend (Postgres de test optionnel pour les tests d'API)
+cd backend && uv run pytest --cov=app --cov-report=term-missing
+# Frontend
+cd frontend && npm run test:coverage
+```
+
+### Badges de couverture (gist)
+
+Les badges en tête de README s'appuient sur un **gist** lu par shields.io, mis à jour par la CI à chaque push sur `main` (action `schneegans/dynamic-badges-action`). Configuration : gist `80b72bc52448a36bc1a08370a68c88a1` (compte `jburckel`), fichiers `tiai-coverage-backend.json` / `tiai-coverage-frontend.json`, secret **`GIST_SECRET`** (PAT scope `gist`). Sans `GIST_SECRET`, les étapes de badge sont simplement ignorées (CI verte).
 
 ## Documentation
 

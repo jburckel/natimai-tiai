@@ -339,6 +339,19 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 
 > Coché = fait. Mis à jour au fil du travail.
 
+**Instantané — 2026-06-13** · Phase 1 (Defender). Scaffold complet committé sur `main` (non poussé) ; backend lint/types/tests + CI verts.
+
+| Jalon | État |
+|---|---|
+| M0 Fondations | 🟢 quasi fini — reste `docker compose up` validé + certificat de signature |
+| M1 Tranche verticale | 🟡 backend OK (enroll/heartbeat/identité) ; agent = squelette (service + WMI + DPAPI à porter) |
+| M2 Agent Defender complet | ⬜ à faire |
+| M3 Backend complet | 🟡 commandes + garde-fou empreinte ; reste dédup menaces, stats, révocation, broadcast par filtre |
+| M4 Console | 🟡 liste des postes seule |
+| M5 Durcissement | 🟡 JWT + rôles, provider Mailgun ; reste audit, jobs ARQ branchés, rotation, rate-limit |
+| M6 Packaging & GPO | ⬜ à faire |
+| Transverse | 🟢 tests backend/frontend + ruff + mypy + CI (tous verts) |
+
 **M0 — Fondations**
 - [x] Mono-repo `/agent` `/backend` `/frontend` `/deploy`
 - [x] Squelette `docker-compose` (db, redis, backend, worker, frontend, caddy)

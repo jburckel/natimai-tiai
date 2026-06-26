@@ -8,9 +8,16 @@ API tests use a real Postgres test database — set ``TIAI_TEST_DATABASE_URL``
 suite in CI.
 """
 
+import asyncio
 import os
+import sys
 
 import pytest_asyncio
+
+# psycopg's async driver cannot run on Windows' default ProactorEventLoop.
+# Use the selector loop there (no-op on Linux/CI).
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 TEST_DATABASE_URL = os.getenv("TIAI_TEST_DATABASE_URL")
 
