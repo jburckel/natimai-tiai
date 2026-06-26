@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Natimai-Solutions/natimai-tiai/actions/workflows/ci.yml/badge.svg)](https://github.com/jburckel/natimai-tiai/actions/workflows/ci.yml)
 [![Couverture backend](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jburckel/80b72bc52448a36bc1a08370a68c88a1/raw/tiai-coverage-backend.json)](https://github.com/Natimai-Solutions/natimai-tiai/actions/workflows/ci.yml)
-[![Couverture frontend](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jburckel/80b72bc52448a36bc1a08370a68c88a1/raw/tiai-coverage-frontend.json)](https://github.com/jburckel/Natimai-Solutions/actions/workflows/ci.yml)
+[![Couverture frontend](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jburckel/80b72bc52448a36bc1a08370a68c88a1/raw/tiai-coverage-frontend.json)](https://github.com/Natimai-Solutions/natimai-tiai/actions/workflows/ci.yml)
 
 > **Console de gestion de parc informatique** — pilotage centralisé d'un parc de postes Windows.
 >

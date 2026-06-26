@@ -4,8 +4,7 @@ Unit tests (security, permissions, fingerprint) need no database.
 
 API tests use a real Postgres test database — set ``TIAI_TEST_DATABASE_URL``
 (e.g. postgresql+psycopg://tiai:tiai@localhost:5432/tiai_test). Without it the
-``client`` fixture skips, so ``pytest`` stays green locally and runs the full
-suite in CI.
+DB fixtures skip, so ``pytest`` stays green locally and runs the full suite in CI.
 """
 
 import asyncio
@@ -23,25 +22,34 @@ TEST_DATABASE_URL = os.getenv("TIAI_TEST_DATABASE_URL")
 
 
 @pytest_asyncio.fixture
-async def client():
-    """Async HTTP client bound to the app with an isolated test database."""
+async def engine():
+    """Fresh schema on the test database for each test."""
     import pytest
 
     if not TEST_DATABASE_URL:
-        pytest.skip("set TIAI_TEST_DATABASE_URL to run API tests")
+        pytest.skip("set TIAI_TEST_DATABASE_URL to run DB-backed tests")
 
-    from httpx import ASGITransport, AsyncClient
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlmodel import SQLModel
-    from sqlmodel.ext.asyncio.session import AsyncSession
 
-    from app.core.db import get_db  # noqa: PLC0415
-    from app.main import app  # noqa: PLC0415 (populates metadata)
+    import app.features.models  # noqa: F401  (populate SQLModel.metadata)
 
-    engine = create_async_engine(TEST_DATABASE_URL)
-    async with engine.begin() as conn:
+    eng = create_async_engine(TEST_DATABASE_URL)
+    async with eng.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
         await conn.run_sync(SQLModel.metadata.create_all)
+    yield eng
+    await eng.dispose()
+
+
+@pytest_asyncio.fixture
+async def client(engine):
+    """Async HTTP client bound to the app, backed by the test database."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.core.db import get_db
+    from app.main import app
 
     async def override_get_db():
         async with AsyncSession(engine) as session:
@@ -52,4 +60,12 @@ async def client():
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
-    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(engine):
+    """Direct session on the test database (for asserting persisted state)."""
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    async with AsyncSession(engine) as session:
+        yield session

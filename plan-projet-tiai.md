@@ -42,6 +42,8 @@ Deux intervalles : un long pour la remontée d'état (ex. 15 min) et un court po
 
 Un seul conteneur backend + un **worker** suffisent pour l'instant. Pas de Kafka, pas de cluster : les requêtes sont brèves et étalées dans le temps (~1 à 3 req/s pour 1000 postes), le volume ne le justifie pas. Le seul point d'attention est le réglage du pool de connexions PostgreSQL (asyncpg).
 
+**File de tâches : ARQ retenu, broker (RabbitMQ) écarté.** ARQ ne sert qu'aux tâches **serveur internes** (cron d'expiration des commandes, détection des postes inactifs, alertes Mailgun) — pas au canal des agents, qui est en **polling + Postgres** (commandes durables et requêtables, source de vérité). Un broker AMQP serait inadapté sur les deux plans : il réintroduirait des **connexions persistantes** côté postes (NAT/pare-feu/hors-ligne, cf. §2.1) et **ne fait pas de planification native** alors que le besoin de fond est surtout du cron. Ses atouts (routage fin, fan-out, fort débit, DLQ) ne servent pas à cette échelle, et Redis est déjà présent. **À réévaluer en Phase 2/3** si la mesure révèle du temps réel/push, des flux d'événements volumineux ou un fan-out multi-consommateurs. Alternative « plus standard » sans broker si besoin un jour : Celery sur Redis.
+
 ### 2.3 — Identité stable des postes & empreinte
 
 On **sépare** deux besoins : l'**identité** (clé stable pour retrouver le poste) et l'**empreinte** (jeu d'attributs pour détecter un changement). Le `MachineGuid` est écarté comme identité : sur des postes **clonés/ré-imagés sans Sysprep `/generalize`**, il est **dupliqué** (collision sur la clé unique, partage de token).
@@ -346,7 +348,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 | M0 Fondations | 🟢 quasi fini — reste `docker compose up` validé + certificat de signature |
 | M1 Tranche verticale | 🟡 backend OK (enroll/heartbeat/identité) ; agent = squelette (service + WMI + DPAPI à porter) |
 | M2 Agent Defender complet | ⬜ à faire |
-| M3 Backend complet | 🟡 commandes + garde-fou empreinte ; reste dédup menaces, stats, révocation, broadcast par filtre |
+| M3 Backend complet | 🟡 commandes + garde-fou empreinte + dédup/stockage menaces ; reste stats, révocation, broadcast par filtre |
 | M4 Console | 🟡 liste des postes seule |
 | M5 Durcissement | 🟡 JWT + rôles, provider Mailgun ; reste audit, jobs ARQ branchés, rotation, rate-limit |
 | M6 Packaging & GPO | ⬜ à faire |
@@ -378,7 +380,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 **M3 — Backend complet** · 🟡 partiel
 - [x] File de commandes : création (route `POST /commands`, permission `command:execute`)
 - [x] Garde-fou d'empreinte `needs_verification` (enroll + heartbeat)
-- [ ] Déduplication menaces (contrainte + upsert)
+- [x] Déduplication + stockage des menaces (contrainte + upsert `ON CONFLICT DO NOTHING`, testé)
 - [ ] Création **groupée** par filtre, transitions d'état complètes
 - [ ] Stats (`/stats/overview`), recherche/filtrage avancés, révocation de token (API)
 

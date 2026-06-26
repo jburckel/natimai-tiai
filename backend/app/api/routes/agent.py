@@ -2,7 +2,6 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -14,6 +13,8 @@ from app.features.base import utcnow
 from app.features.command.models import Command, CommandStatus
 from app.features.machine import fingerprint
 from app.features.machine.models import Machine
+from app.features.threat.crud import upsert_threats
+from app.features.threat.schemas import ThreatReport
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -68,7 +69,7 @@ class HeartbeatRequest(BaseModel):
     agent_version: str | None = None
     defender: DefenderState | None = None
     fingerprint: Fingerprint | None = None
-    threats: list[dict[str, Any]] = []
+    threats: list[ThreatReport] = []
 
 
 class CommandOut(BaseModel):
@@ -197,7 +198,8 @@ async def heartbeat(
     machine.last_seen = utcnow()
     machine.updated_at = utcnow()
 
-    # TODO(M2): dedup-insert payload.threats (ON CONFLICT DO NOTHING).
+    if payload.threats:
+        await upsert_threats(session, machine.id, payload.threats)
 
     rows = await session.execute(
         select(Command)
