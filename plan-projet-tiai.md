@@ -421,6 +421,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Garde de démarrage : secrets vides/placeholder `changeme*` refusés hors `local` (`SECRET_KEY`, `ENROLLMENT_SECRET`, `POSTGRES_PASSWORD`, `FIRST_ADMIN_PASSWORD`), testé
 - [x] Comparaison timing-safe du secret d'enrôlement (`hmac.compare_digest`)
 - [x] En-têtes de sécurité HTTP posés par Caddy (HSTS, CSP, `nosniff`, `frame-ancestors 'none'`, `Referrer-Policy`) — CSP à valider sur la stack déployée
+- [x] Logs agent : fichier `agent.log` (rotation simple, `.old` > 5 Mio) + niveau `log_level` INFO/DEBUG enfin branché ; chemin nominal loggé (démarrage, identité, enrôlement, heartbeat, commandes + durée) — indispensable en mode service où stderr est perdu ; validé sur poste réel contre la stack dev (enrôlement + heartbeats visibles dans le fichier et machine visible console)
 - [ ] Journal d'audit ; jobs ARQ branchés (nettoyage + envoi d'alertes) ; rotation tokens ; rate-limiting
 
 **M6 — Packaging & GPO** · ⬜ à faire
