@@ -167,7 +167,8 @@ Pour signaler une vulnérabilité, contactez l'équipe sécurité de Natimai plu
 La CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) tourne à chaque push sur `main` et sur chaque PR :
 
 - **Backend** : `ruff format` + `ruff check` + `mypy --strict` + `pytest` **sous couverture** (service PostgreSQL pour les tests d'API). Seuil `fail_under` dans [backend/pyproject.toml](backend/pyproject.toml) — le build échoue en dessous.
-- **Frontend** : `prettier --check` + `vitest run --coverage` (cadré sur `src/services`, à élargir au fil des tests).
+- **Agent** : `gofmt` + `go vet` + `go test` (stubs linux) + build croisé `windows/amd64` (code réel).
+- **Frontend** : `prettier --check` + `vue-tsc` (typecheck) + `vitest run --coverage` (cadré sur `src/services`, à élargir au fil des tests).
 - **PR** : un commentaire de couverture est posté automatiquement (backend + frontend).
 
 ```bash

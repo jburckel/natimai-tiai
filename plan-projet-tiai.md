@@ -358,6 +358,8 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 > Contrat d'erreurs (§2.14) **migré** : `AppError` + handlers (enveloppe stable), catalogue `ErrorCode` reflété côté frontend (`errors.ts`) et consommé par les pages.
 > Fusion de postes (§8) **implémentée** : merge backend (rattachement menaces/commandes + dédup + suppression du doublon) + découverte des doublons par SMBIOS + dialog UI. **46 tests backend** (dont 8 de contrat + 4 de fusion) + **20 vitest** (couverture 100 % services) verts ; ruff/mypy/typecheck/build SPA OK. Phase 1 backend + console fonctionnellement complètes ; reste M6 (packaging/GPO) et la validation end-to-end sur stack déployée.
 
+**Instantané — 2026-07-08** · Durcissement (M5, tranche 1) : garde de démarrage refusant les secrets placeholder hors `local` (validator `Settings`, testé), comparaison timing-safe du secret d'enrôlement, en-têtes de sécurité HTTP au reverse-proxy (HSTS, CSP, nosniff, frame-ancestors). CI étendue : job agent Go (gofmt + vet + tests + build croisé Windows), typecheck `vue-tsc` frontend, action de couverture épinglée par SHA. **Bugfix heartbeat** : la livraison de commandes levait `MissingGreenlet` (accès aux ORM expirés après `commit`) → réponse construite avant le commit ; suite complète verte sur Postgres (**83 tests**).
+
 | Jalon | État |
 |---|---|
 | M0 Fondations | 🟢 quasi fini — reste `docker compose up` validé + certificat de signature |
@@ -365,7 +367,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 | M2 Agent Defender complet | 🟢 implémenté (état + menaces WMI, scans/MAJ PowerShell, config YAML/registre, file locale/back-off) ; reste DoD end-to-end sur poste réel |
 | M3 Backend complet | 🟢 commandes (broadcast par filtre + suivi + expiration), stats `/overview`, recherche/filtrage `/machines`, listing `/threats`, révocation de token, `is_up_to_date` calculé, pool DB configurable ; tests verts sur Postgres |
 | M4 Console | 🟢 login JWT + dashboard KPI/alertes + filtres + détail poste + actions de masse + révocation + fusion de postes |
-| M5 Durcissement | 🟡 JWT + rôles, provider Mailgun ; reste audit, jobs ARQ branchés, rotation, rate-limit |
+| M5 Durcissement | 🟡 JWT + rôles, provider Mailgun, garde secrets prod, timing-safe enroll, en-têtes sécurité ; reste audit, jobs ARQ branchés, rotation, rate-limit |
 | M6 Packaging & GPO | ⬜ à faire |
 | Transverse | 🟢 tests backend/frontend + ruff + mypy + CI (tous verts) |
 
@@ -415,6 +417,9 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 **M5 — Durcissement** · 🟡 partiel (anticipé)
 - [x] Auth console JWT + rôles `admin` / `readonly` (permissions `(ressource, action)`)
 - [x] Provider d'alerte e-mail (Mailgun)
+- [x] Garde de démarrage : secrets vides/placeholder `changeme*` refusés hors `local` (`SECRET_KEY`, `ENROLLMENT_SECRET`, `POSTGRES_PASSWORD`, `FIRST_ADMIN_PASSWORD`), testé
+- [x] Comparaison timing-safe du secret d'enrôlement (`hmac.compare_digest`)
+- [x] En-têtes de sécurité HTTP posés par Caddy (HSTS, CSP, `nosniff`, `frame-ancestors 'none'`, `Referrer-Policy`) — CSP à valider sur la stack déployée
 - [ ] Journal d'audit ; jobs ARQ branchés (nettoyage + envoi d'alertes) ; rotation tokens ; rate-limiting
 
 **M6 — Packaging & GPO** · ⬜ à faire
@@ -424,7 +429,7 @@ Réutilise l'agent et la file de commandes. Nouveaux types de commandes (recherc
 - [x] Tests frontend (`vitest` : service machines)
 - [x] Qualité backend : `ruff format` + `ruff check` + `mypy --strict` (verts)
 - [x] Formatage frontend : `prettier`
-- [x] CI GitHub Actions (backend : uv + ruff + mypy + pytest avec Postgres ; frontend : prettier + vitest)
+- [x] CI GitHub Actions (backend : uv + ruff + mypy + pytest avec Postgres ; frontend : prettier + vue-tsc + vitest ; agent : gofmt + vet + go test + build croisé Windows ; action de couverture épinglée par SHA)
 - [x] Contrat d'erreurs API (`AppError` + handlers, enveloppe `{error:{code,message,details}}`, catalogue `ErrorCode` reflété côté frontend `errors.ts`) — migré depuis `HTTPException` (cf. §2.14), testé (8 tests backend de contrat + 6 frontend)
 
 ---

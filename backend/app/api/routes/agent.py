@@ -224,10 +224,11 @@ async def heartbeat(
         cmd.status = CommandStatus.DELIVERED
         cmd.delivered_at = utcnow()
 
+    # Build the payload before commit: expire_on_commit would otherwise trigger
+    # a sync refresh on attribute access — MissingGreenlet under asyncio.
+    commands = [CommandOut(id=c.id, type=c.type) for c in pending]
     await session.commit()
-    return HeartbeatResponse(
-        commands=[CommandOut(id=c.id, type=c.type) for c in pending]
-    )
+    return HeartbeatResponse(commands=commands)
 
 
 @router.post("/commands/{command_id}/result")
