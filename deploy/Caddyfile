@@ -13,6 +13,19 @@
 {$TIAI_SERVER_NAME:tiai.natimai.local} {
 	tls /etc/caddy/certs/tiai.crt /etc/caddy/certs/tiai.key
 
+	# En-têtes de sécurité — posés ici (seul point d'exposition) plutôt que
+	# dans nginx : `header` écrase toute valeur amont, source de vérité unique.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		# CSP pour la SPA Quasar : scripts/styles servis par le build (self) ;
+		# 'unsafe-inline' requis pour les styles inline posés par Quasar/Vue.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
 	# API backend
 	handle /api/* {
 		reverse_proxy backend:8000

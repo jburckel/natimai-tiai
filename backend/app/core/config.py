@@ -1,6 +1,6 @@
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import AnyUrl, BeforeValidator, computed_field
+from pydantic import AnyUrl, BeforeValidator, computed_field, model_validator
 from pydantic_core import MultiHostUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -100,6 +100,33 @@ class Settings(BaseSettings):
     SIGNATURE_MAX_AGE_DAYS: int = 3
     # A machine is considered inactive after this many days without heartbeat.
     INACTIVE_AFTER_DAYS: int = 30
+
+    @model_validator(mode="after")
+    def _refuse_placeholder_secrets(self) -> Self:
+        """Fail fast outside `local` when a secret is empty or a placeholder.
+
+        Guards against an incomplete deploy `.env`: booting production with
+        `SECRET_KEY=changeme` would make every console JWT forgeable (plan §7).
+        Placeholders in code defaults and deploy/.env.example all start with
+        "changeme".
+        """
+        if self.ENVIRONMENT == "local":
+            return self
+        for name in (
+            "SECRET_KEY",
+            "ENROLLMENT_SECRET",
+            "POSTGRES_PASSWORD",
+            "FIRST_ADMIN_PASSWORD",
+        ):
+            value: str | None = getattr(self, name)
+            if value is None:
+                continue
+            if not value or value.startswith("changeme"):
+                raise ValueError(
+                    f"{name} is empty or still a 'changeme' placeholder; refusing "
+                    f"to start in {self.ENVIRONMENT} (see deploy/.env.example)"
+                )
+        return self
 
 
 settings = Settings()

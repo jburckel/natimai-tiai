@@ -1,3 +1,4 @@
+import hmac
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated
@@ -25,7 +26,10 @@ async def verify_enrollment_secret(
     x_enrollment_secret: Annotated[str | None, Header()] = None,
 ) -> None:
     """Guard for POST /agent/enroll — validates the shared enrollment secret."""
-    if x_enrollment_secret != settings.ENROLLMENT_SECRET:
+    if x_enrollment_secret is None or not hmac.compare_digest(
+        x_enrollment_secret.encode("utf-8"),
+        settings.ENROLLMENT_SECRET.encode("utf-8"),
+    ):
         raise AppError(
             code=ErrorCode.AUTH_ENROLLMENT_SECRET_INVALID,
             status_code=401,
