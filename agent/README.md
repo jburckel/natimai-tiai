@@ -552,6 +552,18 @@ le rallumer.
   détection clone/altération côté serveur.
 - Token par poste **chiffré au repos via DPAPI** (scope machine, lisible par le
   service `LocalSystem`), jamais écrit en clair dans le YAML.
+- Le scope machine seul laisserait **n'importe quelle session locale** déchiffrer
+  `token.dat` : l'agent mêle donc au chiffrement une **entropie par poste**
+  (32 octets aléatoires, générés au premier enrôlement), stockée dans
+  `HKLM\SOFTWARE\Tiai\TokenEntropy` — une clé que les installateurs (script GPO,
+  MSI) restreignent à SYSTEM + Administrateurs. Il faut les deux morceaux pour
+  déchiffrer. Un token écrit avant l'entropie est re-chiffré avec au premier
+  chargement ; une entropie perdue (clé supprimée, poste ré-imagé) coûte un
+  ré-enrôlement, jamais un service qui refuse de démarrer.
+- Un token que le serveur n'honore plus (révocation depuis la console) est
+  **abandonné sur le premier 401** : l'agent retente alors l'enrôlement avec le
+  secret du parc. Tant que la révocation tient, le serveur répond 403 et l'agent
+  attend ; dès qu'un admin « autorise le ré-enrôlement », le poste revient seul.
 
 ## Robustesse (plan §2.9)
 

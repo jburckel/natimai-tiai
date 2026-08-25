@@ -35,6 +35,9 @@ deploy/certs/
 deploy/caddy_data/
 deploy/caddy_config/
 
+# Dumps produits par le service db-backup
+deploy/backups/
+
 # OS / IDE
 .DS_Store
 Thumbs.db

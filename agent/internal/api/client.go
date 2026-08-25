@@ -16,6 +16,20 @@ import (
 	"tiai/agent/internal/models"
 )
 
+// StatusError is a non-2xx response from the server, kept typed so the agent
+// can react to a *specific* status: a 401 on the heartbeat means the stored
+// token is no longer honoured (revocation, an admin's allow-reenroll, a
+// database restored from before our enrollment), and the recovery is to drop
+// the token and re-enroll — which needs the status, not an error string.
+type StatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("status %d: %s", e.StatusCode, e.Body)
+}
+
 // Client talks to the Tiai API.
 type Client struct {
 	baseURL string
@@ -92,7 +106,8 @@ func (c *Client) do(ctx context.Context, method, path string, headers map[string
 
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("%s %s: status %d: %s", method, path, resp.StatusCode, string(b))
+		return fmt.Errorf("%s %s: %w", method, path,
+			&StatusError{StatusCode: resp.StatusCode, Body: string(b)})
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {

@@ -12,6 +12,7 @@ import {
   listAntivirusProducts,
   listMachines,
   mergeMachines,
+  allowReenroll,
   revokeToken,
   wakeMachines,
   wakeNotification,
@@ -117,6 +118,20 @@ describe('revokeToken', () => {
     await revokeToken('m-9');
 
     expect(api.post).toHaveBeenCalledWith('/machines/m-9/revoke-token');
+  });
+});
+
+describe('allowReenroll', () => {
+  beforeEach(() => {
+    vi.mocked(api.post).mockReset();
+  });
+
+  it('posts to the allow-reenroll endpoint', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { status: 'reenroll-allowed' } });
+
+    await allowReenroll('m-9');
+
+    expect(api.post).toHaveBeenCalledWith('/machines/m-9/allow-reenroll');
   });
 });
 

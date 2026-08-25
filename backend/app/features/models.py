@@ -4,6 +4,7 @@ Importing this module guarantees every table is registered on
 ``SQLModel.metadata`` (used by app.core.db and Alembic).
 """
 
+from app.features.audit.models import AuditEntry  # noqa: F401
 from app.features.command.models import Command  # noqa: F401
 from app.features.machine.models import Machine  # noqa: F401
 from app.features.notification.models import EmailOutbox  # noqa: F401
@@ -19,4 +20,5 @@ __all__ = [
     "PasswordResetToken",
     "WindowsUpdate",
     "EmailOutbox",
+    "AuditEntry",
 ]

@@ -101,6 +101,11 @@ export interface MachineDetail extends Machine {
   machine_guid: string | null;
   smbios_uuid: string | null;
   tpm_ek_hash: string | null;
+  /**
+   * The kill-switch state. A revoked poste is cut off for good — even the
+   * fleet-wide secret cannot re-enroll it — until an admin allows it back.
+   */
+  token_revoked: boolean;
   first_seen: string;
   created_at: string;
   updated_at: string;
@@ -166,6 +171,14 @@ export async function getMachine(id: string): Promise<MachineDetail> {
 
 export async function revokeToken(id: string): Promise<void> {
   await api.post(`/machines/${id}/revoke-token`);
+}
+
+/**
+ * Lift a revocation: the old token stays dead, the poste comes back on its
+ * next enrollment attempt (its agent retries by itself, within its back-off).
+ */
+export async function allowReenroll(id: string): Promise<void> {
+  await api.post(`/machines/${id}/allow-reenroll`);
 }
 
 /** What makes a record a candidate duplicate, strongest evidence first. */

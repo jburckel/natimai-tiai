@@ -26,6 +26,8 @@ export const ERROR_MESSAGES: Record<string, string> = {
   'password.reset_token.invalid': 'Ce lien de réinitialisation est invalide ou a expiré',
   'machine.not_found': 'Poste introuvable',
   'machine.merge.self': 'Un poste ne peut pas être fusionné avec lui-même',
+  'machine.enrollment.revoked':
+    "Poste révoqué : autorisez le ré-enrôlement depuis sa fiche pour qu'il revienne",
   'user.not_found': 'Compte introuvable',
   'user.email.taken': 'Cette adresse e-mail est déjà utilisée',
   'user.self.forbidden': 'Vous ne pouvez pas appliquer cette action à votre propre compte',

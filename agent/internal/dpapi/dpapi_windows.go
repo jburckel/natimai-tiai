@@ -42,13 +42,27 @@ func (b *dataBlob) bytes() []byte {
 	return out
 }
 
-// Protect encrypts data with the machine DPAPI key.
-func Protect(data []byte) ([]byte, error) {
+// Protect encrypts data with the machine DPAPI key. The optional entropy is a
+// second secret mixed into the key derivation: machine scope alone lets *any*
+// local principal decrypt, so callers pass a blob that standard users cannot
+// read (cf. config: the entropy lives under an ACL'd registry key). nil keeps
+// the historical behaviour.
+func Protect(data, entropy []byte) ([]byte, error) {
 	in := newBlob(data)
 	var out dataBlob
+	// A nil *dataBlob converts to a 0 uintptr, which is how the API spells
+	// "no entropy". The conversion happens inside the Call expression so the
+	// blob stays pinned for the syscall's duration.
+	var pEntropy *dataBlob
+	if len(entropy) > 0 {
+		b := newBlob(entropy)
+		pEntropy = &b
+	}
 	r, _, err := procCryptProtectData.Call(
 		uintptr(unsafe.Pointer(&in)),
-		0, 0, 0, 0,
+		0,
+		uintptr(unsafe.Pointer(pEntropy)),
+		0, 0,
 		cryptProtectLocalMachine,
 		uintptr(unsafe.Pointer(&out)),
 	)
@@ -59,13 +73,21 @@ func Protect(data []byte) ([]byte, error) {
 	return out.bytes(), nil
 }
 
-// Unprotect decrypts data produced by Protect on the same machine.
-func Unprotect(data []byte) ([]byte, error) {
+// Unprotect decrypts data produced by Protect on the same machine, with the
+// same entropy it was protected under (nil for none).
+func Unprotect(data, entropy []byte) ([]byte, error) {
 	in := newBlob(data)
 	var out dataBlob
+	var pEntropy *dataBlob
+	if len(entropy) > 0 {
+		b := newBlob(entropy)
+		pEntropy = &b
+	}
 	r, _, err := procCryptUnprotectData.Call(
 		uintptr(unsafe.Pointer(&in)),
-		0, 0, 0, 0,
+		0,
+		uintptr(unsafe.Pointer(pEntropy)),
+		0, 0,
 		cryptProtectLocalMachine,
 		uintptr(unsafe.Pointer(&out)),
 	)

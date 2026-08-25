@@ -1,4 +1,5 @@
 import hmac
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated
@@ -16,6 +17,8 @@ from app.core.errors import AppError, ErrorCode
 from app.features.machine.models import Machine
 from app.features.user.models import User
 from app.features.user.permissions import Action, Resource, has_permission
+
+security_log = logging.getLogger("app.security")
 
 SessionDep = Annotated[AsyncSession, Depends(get_db)]
 
@@ -89,7 +92,13 @@ async def get_current_user(
     sub = payload.get("sub")
     if sub is None:
         raise credentials_error
-    user = await session.get(User, uuid.UUID(str(sub)))
+    try:
+        user_id = uuid.UUID(str(sub))
+    except ValueError:
+        # A validly-signed token with a malformed subject is still a bad
+        # credential (401), not a server error (500).
+        raise credentials_error from None
+    user = await session.get(User, user_id)
     if user is None or not user.is_active:
         raise credentials_error
 
@@ -116,6 +125,14 @@ def require_permission(
 
     async def checker(user: CurrentUser) -> User:
         if not has_permission(user.role, resource.value, action.value):
+            # A read-only operator poking at admin endpoints is exactly what a
+            # security review greps for after the fact.
+            security_log.warning(
+                "permission denied: %s asked for %s:%s",
+                user.email,
+                resource.value,
+                action.value,
+            )
             raise AppError(
                 code=ErrorCode.AUTH_PERMISSION_DENIED,
                 status_code=403,

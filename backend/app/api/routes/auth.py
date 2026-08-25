@@ -2,20 +2,26 @@
 password lifecycle — self-service change, and the "forgot password" flow.
 """
 
+import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
 from app.api.fields import Email, Password
-from app.core import security
+from app.core import ratelimit, security
 from app.core.errors import AppError, ErrorCode
+from app.core.net import client_ip
 from app.features.base import utcnow
 from app.features.user import crud, emails
 from app.features.user.models import EmailPreference
+
+# The security log: authentication events, one greppable line each. Without it
+# a brute-force attempt leaves no trace at all outside the rate limiter's 429s.
+security_log = logging.getLogger("app.security")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -39,20 +45,29 @@ class UserOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-@router.post("/login", response_model=Token)
+@router.post(
+    "/login",
+    response_model=Token,
+    dependencies=[Depends(ratelimit.rate_limit(ratelimit.login_limiter, "auth.login"))],
+)
 async def login(
+    request: Request,
     session: SessionDep,
     form: Annotated[OAuth2PasswordRequestForm, Depends()],
 ) -> Token:
     """Authenticate with email (username) + password, return a JWT."""
     user = await crud.authenticate(session, form.username, form.password)
     if user is None:
+        security_log.warning(
+            "login failed for %s from %s", form.username, client_ip(request)
+        )
         raise AppError(
             code=ErrorCode.AUTH_CREDENTIALS_INVALID,
             status_code=401,
             message="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    security_log.info("login ok for %s from %s", user.email, client_ip(request))
     return Token(access_token=security.create_access_token(user.id))
 
 
@@ -125,19 +140,32 @@ class PasswordResetRequest(BaseModel):
     email: Email
 
 
-@router.post("/password-reset/request", status_code=204)
+@router.post(
+    "/password-reset/request",
+    status_code=204,
+    dependencies=[
+        Depends(
+            ratelimit.rate_limit(
+                ratelimit.password_reset_limiter, "auth.password_reset"
+            )
+        )
+    ],
+)
 async def request_password_reset(
-    payload: PasswordResetRequest, session: SessionDep
+    request: Request, payload: PasswordResetRequest, session: SessionDep
 ) -> None:
     """Mail a reset link to the account, if it exists.
 
     Public endpoint. It answers 204 whatever happens — unknown address,
     deactivated account, mail failure — so it cannot be used to find out which
-    e-mails have a console account.
-
-    Note: not rate-limited yet (plan §M5 lists rate limiting as outstanding).
-    Anyone reaching the API can trigger mail to a known address.
+    e-mails have a console account. Rate-limited per source address: each
+    accepted call can put a mail in a known operator's inbox.
     """
+    security_log.info(
+        "password reset requested for %s from %s",
+        payload.email,
+        client_ip(request),
+    )
     user = await crud.get_by_email(session, payload.email)
     if user is None or not user.is_active:
         return

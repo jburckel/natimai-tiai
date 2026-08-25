@@ -27,6 +27,12 @@
   propriétés conserve la configuration en place. %ProgramData%\Tiai (token
   DPAPI, logs) n'est pas touché non plus : un poste réinstallé garde son
   enrôlement.
+
+  Le paquet verrouille aussi les deux emplacements sensibles (DACL réduite à
+  SYSTEM + Administrateurs, SDDL avec SIDs universels — les mêmes que le script
+  GPO) : HKLM\SOFTWARE\Tiai, où HKLM\SOFTWARE lisible par tout utilisateur
+  authentifié exposerait le secret d'enrôlement, et %ProgramData%\Tiai, où les
+  ACL héritées laisseraient token.dat lisible.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
@@ -75,8 +81,31 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Tiai" />
     </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="TiaiDataFolder" Name="Tiai" />
+    </StandardDirectory>
 
     <ComponentGroup Id="Agent" Directory="INSTALLFOLDER">
+
+      <!-- Toujours installés, quelles que soient les propriétés fournies :
+           ce sont eux qui verrouillent la clé et le dossier de données.
+           Permanent : la désinstallation les laisse, comme le reste. -->
+      <Component Id="RegKeyAcl" Guid="A052717E-3D53-421D-8F24-09F0017DA9D0"
+                 Permanent="yes">
+        <RegistryKey Root="HKLM" Key="SOFTWARE\Tiai" ForceCreateOnInstall="yes">
+          <!-- KeyPath du composant (un composant registre s'ancre sur une
+               valeur) ; versionnée pour pouvoir faire évoluer la DACL un jour. -->
+          <RegistryValue Name="AclVersion" Type="integer" Value="1" KeyPath="yes" />
+          <PermissionEx Sddl="D:P(A;CI;KA;;;SY)(A;CI;KA;;;BA)" />
+        </RegistryKey>
+      </Component>
+
+      <Component Id="DataDirAcl" Guid="8F66442E-F618-4EB2-8B93-BEE247FFE645"
+                 Permanent="yes" Directory="TiaiDataFolder">
+        <CreateFolder>
+          <PermissionEx Sddl="D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
+        </CreateFolder>
+      </Component>
 
       <Component Id="AgentExe" Guid="BC1E88C9-9E8F-4EF6-80BD-766167DE3A60">
         <File Id="AgentExeFile" Name="tiai-agent.exe" Source="$(var.AgentExe)" KeyPath="yes" />

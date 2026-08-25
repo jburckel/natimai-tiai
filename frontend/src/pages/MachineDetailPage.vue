@@ -103,8 +103,21 @@
       >
         <q-tooltip>{{ mergeHint }}</q-tooltip>
       </q-btn>
+      <!-- One slot, two states: revoking and lifting the revocation are the
+           two halves of the same kill-switch, and showing both at once would
+           read as a choice when only one ever applies. -->
       <q-btn
-        v-if="auth.isAdmin"
+        v-if="auth.isAdmin && machine?.token_revoked"
+        flat
+        dense
+        color="positive"
+        icon="key"
+        label="Autoriser le ré-enrôlement"
+        class="q-ml-sm"
+        @click="confirmAllowReenroll"
+      />
+      <q-btn
+        v-else-if="auth.isAdmin"
         flat
         dense
         color="negative"
@@ -115,6 +128,21 @@
         @click="confirmRevoke"
       />
     </div>
+
+    <q-banner v-if="machine?.token_revoked" class="bg-red-2 q-mb-md" rounded>
+      <template #avatar><q-icon name="key_off" color="negative" /></template>
+      Token révoqué : le poste est coupé du serveur et ne peut plus se ré-enrôler, même avec le
+      secret du parc, tant que le ré-enrôlement n'est pas autorisé ici.
+      <template #action>
+        <q-btn
+          v-if="auth.isAdmin"
+          flat
+          dense
+          label="Autoriser le ré-enrôlement"
+          @click="confirmAllowReenroll"
+        />
+      </template>
+    </q-banner>
 
     <q-banner v-if="machine?.needs_verification" class="bg-orange-2 q-mb-md" rounded>
       <template #avatar><q-icon name="warning" color="orange" /></template>
@@ -473,6 +501,7 @@ import { useQuasar, type QTableColumn } from 'quasar';
 import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from 'src/composables/useAutoRefresh';
 import { useMachineNavigation } from 'src/composables/useMachineNavigation';
 import {
+  allowReenroll,
   getDuplicates,
   getMachine,
   listMachines,
@@ -906,7 +935,9 @@ async function sendWake() {
 function confirmRevoke() {
   $q.dialog({
     title: 'Révoquer le token',
-    message: 'Le poste devra se ré-enrôler. Continuer ?',
+    message:
+      'Le poste sera coupé du serveur et ne pourra pas revenir — même avec le secret du parc — ' +
+      'tant que le ré-enrôlement ne sera pas autorisé depuis cette page. Continuer ?',
     cancel: true,
     persistent: true,
   }).onOk(() => {
@@ -921,6 +952,29 @@ async function doRevoke() {
     await load();
   } catch (e) {
     $q.notify({ type: 'negative', message: apiErrorMessage(e, 'Échec de la révocation') });
+  }
+}
+
+function confirmAllowReenroll() {
+  $q.dialog({
+    title: 'Autoriser le ré-enrôlement',
+    message:
+      "L'ancien token reste invalide ; le poste reviendra de lui-même à sa prochaine tentative " +
+      "d'enrôlement, dans les minutes qui suivent s'il est allumé. Continuer ?",
+    cancel: true,
+    persistent: true,
+  }).onOk(() => {
+    void doAllowReenroll();
+  });
+}
+
+async function doAllowReenroll() {
+  try {
+    await allowReenroll(props.id);
+    $q.notify({ type: 'positive', message: 'Ré-enrôlement autorisé' });
+    await load();
+  } catch (e) {
+    $q.notify({ type: 'negative', message: apiErrorMessage(e, "Échec de l'autorisation") });
   }
 }
 
