@@ -321,6 +321,8 @@ async def test_machine_filter_with_active_threats(client, db_session):
 
 
 async def test_revoke_token_blocks_agent(client, db_session):
+    from app.core.config import settings
+
     headers = await _admin_headers(client, db_session)
     enrolled = await _enroll(client, "m-revoke")
     token = enrolled["token"]
@@ -333,11 +335,42 @@ async def test_revoke_token_blocks_agent(client, db_session):
     )
     assert resp.status_code == 200
 
-    # Rejected after revocation.
+    # Rejected after revocation, and the console sees why.
     assert (await _heartbeat(client, token)).status_code == 401
+    detail = await client.get(
+        f"/api/v1/machines/{enrolled['machine_id']}", headers=headers
+    )
+    assert detail.json()["token_revoked"] is True
 
-    # Re-enrollment issues a fresh token and clears the flag.
-    re = await _enroll(client, "m-revoke")
+    # The fleet-wide secret is not enough to come back: re-enrollment of a
+    # revoked machine is refused, so a revocation sticks until an admin lifts
+    # it (the secret sits on every poste of the parc).
+    resp = await client.post(
+        "/api/v1/agent/enroll",
+        headers={"X-Enrollment-Secret": settings.ENROLLMENT_SECRET},
+        json={"machine_uuid": "m-revoke"},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "machine.enrollment.revoked"
+
+
+async def test_allow_reenroll_restores_machine(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    enrolled = await _enroll(client, "m-reenroll")
+    old_token = enrolled["token"]
+    machine_id = enrolled["machine_id"]
+
+    await client.post(f"/api/v1/machines/{machine_id}/revoke-token", headers=headers)
+    resp = await client.post(
+        f"/api/v1/machines/{machine_id}/allow-reenroll", headers=headers
+    )
+    assert resp.status_code == 200
+
+    # The pre-revocation token never comes back to life...
+    assert (await _heartbeat(client, old_token)).status_code == 401
+    # ...but the machine may enroll again and returns with a fresh token.
+    re = await _enroll(client, "m-reenroll")
+    assert re["machine_id"] == machine_id
     assert (await _heartbeat(client, re["token"])).status_code == 200
 
 
@@ -1147,6 +1180,18 @@ async def test_heartbeat_fingerprint_change_flags_verification(client, db_sessio
     enrolled = await _enroll(client, "m-fpchg", fingerprint={"smbios_uuid": "SMB-1"})
     # A different SMBIOS anchor on a later heartbeat is suspicious.
     await _heartbeat(client, enrolled["token"], fingerprint={"smbios_uuid": "SMB-2"})
+    body = (
+        await client.get(f"/api/v1/machines/{enrolled['machine_id']}", headers=headers)
+    ).json()
+    assert body["needs_verification"] is True
+
+
+async def test_reenroll_without_known_anchor_flags_verification(client, db_session):
+    headers = await _admin_headers(client, db_session)
+    enrolled = await _enroll(client, "m-fpomit", fingerprint={"smbios_uuid": "SMB-9"})
+    # Re-enrolling while *omitting* the anchor the machine used to report is as
+    # suspicious as changing it: omission is the cheapest way around the diff.
+    await _enroll(client, "m-fpomit")
     body = (
         await client.get(f"/api/v1/machines/{enrolled['machine_id']}", headers=headers)
     ).json()

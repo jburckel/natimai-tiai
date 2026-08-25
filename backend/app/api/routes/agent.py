@@ -1,17 +1,20 @@
 """Agent-facing endpoints: enroll, heartbeat (+ command pickup), command result."""
 
+import logging
 import uuid
 from datetime import datetime
 from ipaddress import ip_address
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func
 from sqlmodel import select
 
 from app.api.deps import CurrentMachine, SessionDep, verify_enrollment_secret
-from app.core import security
+from app.core import ratelimit, security
 from app.core.config import settings
+from app.core.errors import AppError, ErrorCode
+from app.core.net import client_ip
 from app.features.base import utcnow
 from app.features.command import crud as command_crud
 from app.features.command.models import (
@@ -29,6 +32,8 @@ from app.features.threat.schemas import ThreatReport
 from app.features.windows_update.crud import replace_pending
 from app.features.windows_update.schemas import WUStateReport
 from app.features.wol.packet import normalize_mac
+
+security_log = logging.getLogger("app.security")
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -260,13 +265,23 @@ class CommandResult(BaseModel):
 @router.post(
     "/enroll",
     response_model=EnrollResponse,
-    dependencies=[Depends(verify_enrollment_secret)],
+    # The limiter runs first: a brute force of the secret must hit the 429
+    # wall, not a free constant-time comparison oracle.
+    dependencies=[
+        Depends(ratelimit.rate_limit(ratelimit.enroll_limiter, "agent.enroll")),
+        Depends(verify_enrollment_secret),
+    ],
 )
-async def enroll(payload: EnrollRequest, session: SessionDep) -> EnrollResponse:
+async def enroll(
+    request: Request, payload: EnrollRequest, session: SessionDep
+) -> EnrollResponse:
     """Register a machine (trust on first use) and emit its token once.
 
     Idempotent on machine_uuid: re-enrollment rotates the token. A known
-    machine_uuid re-enrolling is a guard-rail signal (reinstall vs token theft).
+    machine_uuid re-enrolling is a guard-rail signal (reinstall vs token theft),
+    and a *revoked* machine is refused outright: the revocation is lifted from
+    the console (allow-reenroll), never by the fleet-wide secret — otherwise
+    anyone holding that secret could undo the kill-switch.
     """
     result = await session.exec(
         select(Machine).where(Machine.machine_uuid == payload.machine_uuid)
@@ -276,15 +291,35 @@ async def enroll(payload: EnrollRequest, session: SessionDep) -> EnrollResponse:
 
     token = security.generate_token()
     suspicious = False
+    is_new = machine is None
     if machine is None:
         machine = Machine(machine_uuid=payload.machine_uuid)
         session.add(machine)
     else:
+        if machine.token_revoked:
+            security_log.warning(
+                "enroll refused for revoked machine %s from %s",
+                payload.machine_uuid,
+                client_ip(request),
+            )
+            raise AppError(
+                code=ErrorCode.MACHINE_ENROLLMENT_REVOKED,
+                status_code=403,
+                message="Machine token was revoked; an administrator must "
+                "allow re-enrollment from the console",
+            )
         # Re-enrollment of a known identity: a changed hardware anchor is a
         # guard-rail signal (reinstall vs token theft / clone).
         suspicious = fingerprint.is_suspicious_change(
             machine, smbios_uuid=fp.smbios_uuid, tpm_ek_hash=fp.tpm_ek_hash
         )
+        # A missing anchor is as suspicious as a changed one — omitting the
+        # field is the cheapest way around the comparison above, and an agent
+        # that could read the anchor once can read it still.
+        if fingerprint.trustworthy_smbios_uuid(
+            machine.smbios_uuid
+        ) and not fingerprint.trustworthy_smbios_uuid(fp.smbios_uuid):
+            suspicious = True
 
     # Another active identity sharing the same SMBIOS anchor → re-image of the
     # same physical box or a clone → flag for manual reconciliation (merge).
@@ -314,8 +349,18 @@ async def enroll(payload: EnrollRequest, session: SessionDep) -> EnrollResponse:
     if suspicious:
         machine.needs_verification = True
     machine.token_hash = security.hash_token(token)
-    machine.token_revoked = False
     machine.updated_at = utcnow()
+
+    # Every enrollment is a security event: a token was minted. The log line is
+    # what ties a rogue enrollment to its source address after the fact.
+    security_log.log(
+        logging.WARNING if suspicious else logging.INFO,
+        "%s of machine %s from %s%s",
+        "enrollment" if is_new else "re-enrollment",
+        payload.machine_uuid,
+        client_ip(request),
+        " (suspicious fingerprint, flagged for verification)" if suspicious else "",
+    )
 
     await session.commit()
     await session.refresh(machine)

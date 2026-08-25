@@ -39,11 +39,13 @@ class ErrorCode(enum.StrEnum):
     # Resources
     MACHINE_NOT_FOUND = "machine.not_found"
     MACHINE_MERGE_SELF = "machine.merge.self"
+    MACHINE_ENROLLMENT_REVOKED = "machine.enrollment.revoked"
     USER_NOT_FOUND = "user.not_found"
     USER_EMAIL_TAKEN = "user.email.taken"
     USER_SELF_FORBIDDEN = "user.self.forbidden"
     # Request / generic
     REQUEST_VALIDATION_ERROR = "request.validation_error"
+    RATE_LIMITED = "request.rate_limited"
     HTTP_NOT_FOUND = "http.not_found"
     HTTP_ERROR = "http.error"
     INTERNAL_SERVER_ERROR = "internal.server_error"

@@ -8,6 +8,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -186,8 +187,21 @@ func (c *Config) Save(path string) error {
 // tokenPath is token.dat next to the config file.
 func tokenPath(dir string) string { return filepath.Join(dir, tokenFileName) }
 
+// Seams for tests: the real providers read (and create) machine-wide state —
+// the registry on Windows — which is nothing a unit test should touch.
+var (
+	readEntropy   = readTokenEntropy
+	ensureEntropy = ensureTokenEntropy
+)
+
 // LoadToken reads and decrypts the per-machine token, or returns "" if none is
 // stored yet.
+//
+// An *undecryptable* token is also "": the entropy may be gone (registry key
+// deleted, re-imaged system), and a token nobody can read is a token the agent
+// does not have — it re-enrolls with the fleet secret, which is the designed
+// recovery and covers every way the blob can die. Failing to start instead
+// would turn a lost registry value into a poste lost until someone logs on.
 func LoadToken(dir string) (string, error) {
 	raw, err := os.ReadFile(tokenPath(dir))
 	if err != nil {
@@ -200,24 +214,53 @@ func LoadToken(dir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decode token: %w", err)
 	}
-	plain, err := dpapi.Unprotect(blob)
+	entropy := readEntropy()
+	plain, err := dpapi.Unprotect(blob, entropy)
 	if err != nil {
-		return "", fmt.Errorf("unprotect token: %w", err)
+		// Legacy blob, written before the entropy existed.
+		plain, err = dpapi.Unprotect(blob, nil)
+		if err != nil {
+			log.Printf("config: stored token is undecryptable (%v); treating as not enrolled", err)
+			return "", nil
+		}
+		entropy = nil
+	}
+	if entropy == nil {
+		// Decrypted the pre-entropy way: re-protect under an entropy now so
+		// the blob any local user can unprotect disappears. Best effort — with
+		// no rights to create the entropy, the token simply stays as it was.
+		if e := ensureEntropy(); e != nil {
+			if err := SaveToken(dir, string(plain)); err != nil {
+				log.Printf("config: re-protect token with entropy: %v", err)
+			}
+		}
 	}
 	return string(plain), nil
 }
 
-// SaveToken encrypts (DPAPI) and stores the per-machine token atomically.
+// SaveToken encrypts (DPAPI, with the per-install entropy) and stores the
+// per-machine token atomically.
 func SaveToken(dir, token string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
-	blob, err := dpapi.Protect([]byte(token))
+	blob, err := dpapi.Protect([]byte(token), ensureEntropy())
 	if err != nil {
 		return fmt.Errorf("protect token: %w", err)
 	}
 	encoded := base64.StdEncoding.EncodeToString(blob)
 	return atomicWrite(tokenPath(dir), []byte(encoded), 0o600)
+}
+
+// ClearToken removes the stored per-machine token, if any. Used when the
+// server stops honouring it (revocation, allow-reenroll, restored database):
+// enrollment only runs when no token is stored, so keeping a dead one would
+// pin the agent on 401s for the rest of its life.
+func ClearToken(dir string) error {
+	if err := os.Remove(tokenPath(dir)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func atomicWrite(path string, data []byte, perm os.FileMode) error {

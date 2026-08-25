@@ -14,6 +14,12 @@ GPO, interroge le serveur à intervalle régulier : le serveur ne se connecte
 jamais aux postes, ce qui traverse NAT et pare-feu sans ouvrir de flux entrant et
 gère naturellement les postes éteints.
 
+## Aperçu visuel
+
+![Tableau de bord Tia'i](images/Dashboard.png)
+
+![Liste des postes Tia'i](images/Postes.png)
+
 ## Fonctionnalités
 
 - **Microsoft Defender** — état des signatures et de la protection temps réel,
@@ -110,7 +116,7 @@ les binaires versionnés de chaque release restent sur la page
 Le serveur s'installe via [Docker](https://www.docker.com/), disponible sur
 Windows, macOS et Linux
 ([instructions d'installation](https://docs.docker.com/get-started/get-docker/)).
-Nul besoin de connaître Docker : une fois installé, il télécharge et démarre
+Il n'est pas nécessaire de connaître Docker : une fois installé, il télécharge et démarre
 tous les composants — base de données, serveur, console web — en une seule
 commande, sans rien d'autre à installer sur la machine.
 

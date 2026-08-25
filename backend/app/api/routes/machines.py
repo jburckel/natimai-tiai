@@ -1,7 +1,4 @@
-"""Console-facing endpoints: list and inspect managed machines.
-
-Auth (admin session/JWT) is added in M5; left open for the MVP.
-"""
+"""Console-facing endpoints: list and inspect managed machines."""
 
 import uuid
 from datetime import datetime
@@ -128,6 +125,10 @@ class MachineDetailOut(MachineOut):
     machine_guid: str | None
     smbios_uuid: str | None
     tpm_ek_hash: str | None
+    # Lets the console show that a poste is cut off and offer the only way
+    # back: « autoriser le ré-enrôlement » (the fleet secret no longer clears
+    # a revocation on its own).
+    token_revoked: bool
     first_seen: datetime
     created_at: datetime
     updated_at: datetime
@@ -594,15 +595,56 @@ async def list_duplicates(
     "/{machine_id}/revoke-token",
     dependencies=[Depends(require_permission(Resource.MACHINE, Action.WRITE))],
 )
-async def revoke_token(machine_id: uuid.UUID, session: SessionDep) -> dict[str, str]:
-    """Revoke a machine's token (kill-switch): its next call is rejected and it
-    must re-enroll, which issues a fresh token and clears the flag (plan §2.4).
+async def revoke_token(
+    machine_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> dict[str, str]:
+    """Revoke a machine's token (kill-switch): its next call is rejected, and
+    so is any re-enrollment attempt — the fleet-wide secret must not be enough
+    to undo a revocation (plan §2.4). The way back is ``allow-reenroll``.
     """
     machine = await _require_machine(session, machine_id)
     machine.token_revoked = True
     machine.updated_at = utcnow()
+    audit.record(
+        session,
+        actor=user.email,
+        action="machine.revoke_token",
+        resource_type="machine",
+        resource_id=str(machine.id),
+        details={"hostname": machine.hostname, "machine_uuid": machine.machine_uuid},
+    )
     await session.commit()
     return {"status": "revoked"}
+
+
+@router.post(
+    "/{machine_id}/allow-reenroll",
+    dependencies=[Depends(require_permission(Resource.MACHINE, Action.WRITE))],
+)
+async def allow_reenroll(
+    machine_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> dict[str, str]:
+    """Lift a revocation: the machine may enroll again with the shared secret.
+
+    The old token stays dead — ``token_hash`` is cleared rather than left in
+    place, so a token stolen before the revocation never comes back to life.
+    The poste returns on its next enrollment attempt with a fresh token (its
+    agent drops the stale token on the first 401 and re-enrolls by itself).
+    """
+    machine = await _require_machine(session, machine_id)
+    machine.token_revoked = False
+    machine.token_hash = None
+    machine.updated_at = utcnow()
+    audit.record(
+        session,
+        actor=user.email,
+        action="machine.allow_reenroll",
+        resource_type="machine",
+        resource_id=str(machine.id),
+        details={"hostname": machine.hostname, "machine_uuid": machine.machine_uuid},
+    )
+    await session.commit()
+    return {"status": "reenroll-allowed"}
 
 
 class MergeRequest(BaseModel):

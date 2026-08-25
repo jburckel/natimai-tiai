@@ -30,7 +30,11 @@ Deux points qui font échouer la majorité des déploiements :
 - Un `.exe` téléchargé depuis GitHub porte un marqueur de zone. Faire
   `Unblock-File .\tiai-agent.exe` avant de le déposer.
 
-Vérifier le hash publié dans `SHA256SUMS.txt` de la release avant de copier.
+Relever le hash publié dans `SHA256SUMS.txt` de la release : il se vérifie au
+moment de copier, **et** il se passe au script en `-ExpectedHash` (§2) pour que
+chaque poste le re-vérifie à chaque démarrage. Sans cette épingle, quiconque
+obtient l'écriture sur le partage fait exécuter son binaire en SYSTEM sur tout
+le parc au prochain boot ; avec elle, il faudrait aussi modifier la GPO.
 
 ## 2. Créer la GPO
 
@@ -42,7 +46,12 @@ l'*ExecutionPolicy* locale) :
 | Champ | Valeur |
 |---|---|
 | Script Name | `powershell.exe` |
-| Script Parameters | `-NoProfile -ExecutionPolicy Bypass -File \\natimai.local\NETLOGON\Tiai\Install-TiaiAgent.ps1 -SourceExe \\natimai.local\NETLOGON\Tiai\tiai-agent.exe -ApiBaseUrl https://tiai.natimai.local` |
+| Script Parameters | `-NoProfile -ExecutionPolicy Bypass -File \\natimai.local\NETLOGON\Tiai\Install-TiaiAgent.ps1 -SourceExe \\natimai.local\NETLOGON\Tiai\tiai-agent.exe -ApiBaseUrl https://tiai.natimai.local -ExpectedHash <SHA-256 de SHA256SUMS.txt>` |
+
+`-ExpectedHash` est optionnel mais recommandé : le script refuse alors un
+binaire du partage qui ne porte pas ce hash (le poste garde sa version en
+place). À chaque nouvelle release, mettre à jour **les deux ensemble** : le
+binaire déposé sur le partage et le hash dans les paramètres de la GPO.
 
 Pour un parc où le **nom** de l'utilisateur connecté ne doit pas remonter au
 serveur, ajouter `-ReportSessionUsername false` aux paramètres ci-dessus : la
@@ -68,13 +77,17 @@ dans `token.dat`).
 
 ## 4. Ce que fait le script sur le poste
 
-1. copie `tiai-agent.exe` dans `C:\Program Files\Tiai\` (service arrêté d'abord
-   si le binaire change → c'est le mécanisme de mise à jour : on remplace le
-   fichier sur le partage, les postes se mettent à jour au démarrage suivant) ;
+1. vérifie le binaire du partage contre `-ExpectedHash` s'il est fourni, puis
+   le copie dans `C:\Program Files\Tiai\` (service arrêté d'abord si le binaire
+   change → c'est le mécanisme de mise à jour : on remplace le fichier sur le
+   partage, les postes se mettent à jour au démarrage suivant) ;
 2. écrit `HKLM\SOFTWARE\Tiai` (`ApiBaseURL`, `EnrollmentSecret`, `LogLevel`,
    intervalles, `ReportSessionUsername`) — **à chaque exécution**, donc un
    changement de GPO est repris ;
-3. `install` + `Automatic` + `start`.
+3. restreint les ACL de `HKLM\SOFTWARE\Tiai` et de `C:\ProgramData\Tiai` à
+   SYSTEM + Administrateurs : par défaut, tout utilisateur du poste pourrait y
+   lire le secret d'enrôlement et le token chiffré ;
+4. `install` + `Automatic` + `start`.
 
 Aucun `config.yaml` n'est déposé : l'agent tolère son absence et se configure
 depuis le registre et ses valeurs par défaut. `ApiBaseURL` est le seul réglage
@@ -119,4 +132,7 @@ conséquence, l'enrôlement étant idempotent côté serveur.
   (`SELECT * FROM Win32_Processor WHERE Architecture = 12`) pointant sur le
   binaire `windows-arm64`.
 - **Binaire non signé** : sans impact ici (le service est lancé par le SCM, pas
-  par un double-clic), mais SmartScreen avertit lors des essais manuels.
+  par un double-clic), mais SmartScreen avertit lors des essais manuels. En
+  attendant une signature de code, `-ExpectedHash` est le contrôle qui tient le
+  rôle : l'intégrité du binaire est vérifiée sur chaque poste contre une valeur
+  que seule la GPO porte.

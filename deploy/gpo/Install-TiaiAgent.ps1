@@ -34,6 +34,15 @@
     les parametres de script GPO sont stockes dans scripts.ini (SYSVOL), lisible
     par tout utilisateur authentifie.
 
+.PARAMETER ExpectedHash
+    SHA-256 attendu du binaire (celui publie dans SHA256SUMS.txt de la release).
+    Renseigne, le script REFUSE d'installer un binaire du partage qui ne le
+    porte pas : sans lui, un acces en ecriture sur le partage suffit a faire
+    executer n'importe quoi en SYSTEM sur tout le parc au prochain demarrage.
+    L'epingle vit dans les parametres de la GPO, que seul un admin du domaine
+    modifie -- falsifier le binaire ne suffit donc plus. A mettre a jour a
+    chaque nouvelle release, en meme temps que le binaire depose.
+
 .PARAMETER ReportSessionUsername
     Remontee du NOM de l'utilisateur connecte ('true' / 'false'). La presence
     d'une session est remontee dans tous les cas ; seul le nom est concerne.
@@ -52,6 +61,7 @@
 param(
     [Parameter(Mandatory = $true)][string] $SourceExe,
     [Parameter(Mandatory = $true)][string] $ApiBaseUrl,
+    [string] $ExpectedHash = '',
     [string] $EnrollmentSecret = '',
     [ValidateSet('INFO', 'DEBUG')][string] $LogLevel = 'INFO',
     [int]    $HeartbeatIntervalSeconds = 0,
@@ -107,6 +117,19 @@ try {
 
     # --- 2. Faut-il (re)copier le binaire ? -------------------------------------
     $sourceHash = (Get-FileHash -LiteralPath $SourceExe -Algorithm SHA256).Hash
+
+    # Epingle : le binaire du partage doit porter le hash annonce par la GPO.
+    # Le partage est le maillon faible (quiconque y ecrit deploie du SYSTEM sur
+    # tout le parc) ; l'epingle deplace la confiance vers les parametres de la
+    # GPO, que seul un admin du domaine modifie. L'echec laisse le poste sur son
+    # binaire actuel : un agent d'hier vaut mieux qu'un binaire inconnu.
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedHash)) {
+        if ($sourceHash -ne $ExpectedHash.Trim().ToUpperInvariant()) {
+            throw ("Le binaire du partage ne porte pas le hash attendu " +
+                "(attendu $($ExpectedHash.Trim()), trouve $sourceHash) -- installation refusee.")
+        }
+    }
+
     $needsCopy  = $true
     if (Test-Path -LiteralPath $TargetExe) {
         $needsCopy = ((Get-FileHash -LiteralPath $TargetExe -Algorithm SHA256).Hash -ne $sourceHash)
@@ -187,6 +210,44 @@ try {
 
     # Pas de config.yaml a generer : l'agent tolere son absence et se configure
     # entierement depuis les valeurs ci-dessus + ses defauts.
+
+    # --- 3bis. Verrouiller les acces --------------------------------------------
+    # HKLM\SOFTWARE est lisible par tout utilisateur authentifie par defaut : le
+    # secret d'enrolement y serait lisible depuis n'importe quelle session. Meme
+    # probleme pour ProgramData\Tiai (token.dat, journaux). DACL reduite a
+    # SYSTEM + Administrateurs, en SDDL avec les SIDs universels (SY/BA) --
+    # jamais de noms de groupes, localises differemment d'un Windows a l'autre.
+    # Applique seulement si necessaire : le test porte sur les principaux admis
+    # (pas sur la chaine SDDL, que Windows reordonne a la relecture), donc rien
+    # n'est journalise au demarrage d'un poste deja durci.
+    function Test-TiaiAclTight {
+        param($Acl)
+        if (-not $Acl.AreAccessRulesProtected) { return $false }
+        $allowed = @('S-1-5-18', 'S-1-5-32-544')  # SYSTEM, BUILTIN\Administrators
+        foreach ($ace in $Acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+            if ($allowed -notcontains $ace.IdentityReference.Value) { return $false }
+        }
+        return $true
+    }
+    try {
+        if (-not (Test-TiaiAclTight (Get-Acl -Path $RegPath))) {
+            $newAcl = New-Object System.Security.AccessControl.RegistrySecurity
+            $newAcl.SetSecurityDescriptorSddlForm('D:P(A;CI;KA;;;SY)(A;CI;KA;;;BA)')
+            Set-Acl -Path $RegPath -AclObject $newAcl
+            Write-Log 'ACL de HKLM\SOFTWARE\Tiai restreinte a SYSTEM + Administrateurs.'
+        }
+        if (-not (Test-TiaiAclTight (Get-Acl -Path $DataDir))) {
+            $newAcl = New-Object System.Security.AccessControl.DirectorySecurity
+            $newAcl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
+            Set-Acl -Path $DataDir -AclObject $newAcl
+            Write-Log "ACL de $DataDir restreinte a SYSTEM + Administrateurs."
+        }
+    }
+    catch {
+        # Un durcissement qui echoue ne doit pas priver le parc de son agent ;
+        # la ligne ERROR le rend visible dans deploy.log.
+        Write-Log "Durcissement des ACL impossible : $($_.Exception.Message)" 'ERROR'
+    }
 
     # --- 4. Service --------------------------------------------------------------
     if ($null -eq (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {

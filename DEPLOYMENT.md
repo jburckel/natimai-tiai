@@ -173,6 +173,7 @@ Il n'est jamais committé.
 |---|---|---|
 | `TIAI_SERVER_NAME` | `tiai.natimai.local` | Nom du site Caddy ; doit correspondre au CN/SAN du certificat en mode C |
 | `TIAI_DEV_BACKEND_PORT` | `8800` | Port hôte du backend en HTTP direct (override de dev uniquement) |
+| `BACKUP_KEEP_DAYS` | `14` | Rétention des dumps quotidiens de `deploy/backups/` (cf. § « Sauvegardes et restauration ») |
 
 ### Backend
 
@@ -263,6 +264,68 @@ chaque e-mail le lien vers la fiche du poste concerné.
 |---|---|---|
 | `API_BASE_URL` | Build frontend | baseURL axios, injectée au build ; défaut `/api/v1` |
 | `TIAI_TEST_DATABASE_URL` | Tests backend | DSN Postgres pour les tests d'API |
+
+---
+
+## Sauvegardes et restauration
+
+Toute la mémoire de Tia'i — postes, historique des menaces, commandes (qui a
+redémarré quoi), comptes de la console, file d'e-mails — vit dans un seul
+volume PostgreSQL. Le service `db-backup` du compose la sauvegarde **sans rien
+configurer** : un dump au démarrage de la stack (donc juste avant chaque montée
+de version), puis un par 24 h, au format custom de `pg_dump` (`-Fc`,
+compressé), dans `deploy/backups/` sur l'hôte. La rétention est de
+`BACKUP_KEEP_DAYS` jours (défaut 14) et la purge n'a lieu qu'après un dump
+réussi : une base en panne ne fait jamais disparaître les sauvegardes
+existantes.
+
+Vérifier que ça tourne :
+
+```bash
+docker compose logs db-backup     # « sauvegarde OK : tiai-20260825-... »
+ls -lh backups/
+```
+
+**Un dump sur le serveur ne protège pas du serveur.** Copier régulièrement
+`deploy/backups/` hors de la machine (rsync, robocopy, tâche planifiée — peu
+importe le moyen, l'important est qu'il existe). Pour pouvoir reconstruire le
+serveur de zéro, trois choses doivent exister ailleurs :
+
+1. un dump récent de `deploy/backups/` ;
+2. le fichier `deploy/.env` (les secrets ne sont dans aucun dump) ;
+3. le certificat `deploy/certs/` (mode C).
+
+### Restaurer
+
+Sur une stack levée (la base peut être vide ou pleine — `--clean` remet à
+plat) :
+
+```bash
+cd deploy
+docker compose stop backend worker      # plus personne n'écrit dans la base
+docker compose exec db-backup sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -h db -U "$POSTGRES_USER" \
+   -d "$POSTGRES_DB" --clean --if-exists /backups/tiai-AAAAMMJJ-HHMMSS.dump'
+docker compose start backend worker
+```
+
+Au redémarrage, le backend rejoue les migrations Alembic si le dump vient
+d'une version plus ancienne du schéma — restaurer un dump d'hier après une
+montée de version fonctionne donc sans étape supplémentaire. L'inverse (un
+dump plus récent que le code) n'est pas supporté.
+
+Un dump manuel avant une opération risquée :
+
+```bash
+docker compose exec db-backup sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h db -U "$POSTGRES_USER" \
+   -d "$POSTGRES_DB" -Fc -f /backups/tiai-avant-operation.dump'
+```
+
+> **Faire l'exercice une fois.** Une procédure de restauration jamais jouée
+> n'existe pas : sur la stack de dev (`docker-compose.dev.yml`), restaurer un
+> dump et vérifier que la console retrouve ses postes prend dix minutes, et
+> c'est le seul moyen de savoir que la chaîne complète fonctionne.
 
 ---
 

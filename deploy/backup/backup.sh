@@ -1,0 +1,36 @@
+#!/bin/sh
+# Sauvegarde quotidienne de la base Tia'i — tourne dans le conteneur
+# `db-backup` (même image que `db`, donc un pg_dump à la bonne version),
+# écrit dans deploy/backups/ sur l'hôte via le montage /backups.
+#
+# Cycle : un dump au démarrage (donc juste après chaque `docker compose up`,
+# y compris avant une montée de version), puis un par 24 h. Rétention pilotée
+# par BACKUP_KEEP_DAYS — la purge n'a lieu QUE si le dump du jour a réussi :
+# une base injoignable ne doit jamais faire disparaître les sauvegardes
+# existantes.
+set -eu
+
+: "${POSTGRES_USER:?}"
+: "${POSTGRES_PASSWORD:?}"
+: "${POSTGRES_DB:?}"
+KEEP_DAYS="${BACKUP_KEEP_DAYS:-14}"
+
+export PGPASSWORD="$POSTGRES_PASSWORD"
+
+while :; do
+  stamp="$(date -u +%Y%m%d-%H%M%S)"
+  tmp="/backups/.tiai-${stamp}.dump.partial"
+  out="/backups/tiai-${stamp}.dump"
+  # Format custom (-Fc) : compressé, et pg_restore sait en extraire une table
+  # seule si besoin. Écrit d'abord en .partial puis renommé : un dump
+  # interrompu ne peut jamais être pris pour une sauvegarde valide.
+  if pg_dump -h db -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f "$tmp"; then
+    mv "$tmp" "$out"
+    echo "sauvegarde OK : $(basename "$out") ($(du -h "$out" | cut -f1))"
+    find /backups -name 'tiai-*.dump' -mtime +"$KEEP_DAYS" -delete
+  else
+    rm -f "$tmp"
+    echo "ECHEC de la sauvegarde $stamp — les dumps existants sont conservés" >&2
+  fi
+  sleep 86400
+done

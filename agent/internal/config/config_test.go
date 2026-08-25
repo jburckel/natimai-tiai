@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+// Unit tests must not touch machine-wide state (HKLM on Windows): pin the
+// entropy seams to a fixed in-memory value so token round-trips stay hermetic
+// whatever machine — and whatever privileges — they run under.
+func TestMain(m *testing.M) {
+	fixed := []byte("test-entropy-0123456789abcdef!!!")
+	readEntropy = func() []byte { return fixed }
+	ensureEntropy = func() []byte { return fixed }
+	os.Exit(m.Run())
+}
+
 func TestLoadYAMLAppliesDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -167,6 +177,27 @@ func TestTokenRoundTrip(t *testing.T) {
 	}
 	if got != "secret-token-123" {
 		t.Errorf("token round-trip mismatch: got %q", got)
+	}
+}
+
+func TestClearToken(t *testing.T) {
+	dir := t.TempDir()
+
+	// Clearing when nothing is stored is a no-op, not an error: the caller
+	// reacts to a 401 and cannot know whether a file ever existed.
+	if err := ClearToken(dir); err != nil {
+		t.Fatalf("ClearToken on empty dir: %v", err)
+	}
+
+	if err := SaveToken(dir, "secret-token-123"); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+	if err := ClearToken(dir); err != nil {
+		t.Fatalf("ClearToken: %v", err)
+	}
+	tok, err := LoadToken(dir)
+	if err != nil || tok != "" {
+		t.Fatalf("expected no token after clear, got %q err=%v", tok, err)
 	}
 }
 

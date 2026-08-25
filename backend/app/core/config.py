@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # Shared secret deployed by GPO; only authorizes POST /agent/enroll.
     ENROLLMENT_SECRET: str = "changeme-enrollment-secret"
 
+    # --- Rate limiting ---
+    # Escape hatch, not a tuning knob: the per-endpoint budgets live with the
+    # limiters (app.core.ratelimit). Off only for a deployment whose operators
+    # all arrive from one shared address (VPN, proxy) and lock each other out.
+    RATE_LIMIT_ENABLED: bool = True
+
     # --- CORS ---
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_list)

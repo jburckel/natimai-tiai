@@ -18,6 +18,9 @@ class Resource(enum.StrEnum):
     THREAT = "threat"
     COMMAND = "command"
     USER = "user"
+    # The audit log. Admin-only like USER (excluded from _READABLE): who did
+    # what to the parc's accounts and tokens is admin material.
+    AUDIT = "audit"
 
 
 class Action(enum.StrEnum):

@@ -10,8 +10,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -146,7 +148,33 @@ func (a *Agent) tick(ctx context.Context) error {
 	if err := a.ensureEnrolled(ctx); err != nil {
 		return err
 	}
-	return a.pollOnce(ctx)
+	err := a.pollOnce(ctx)
+	if isUnauthorized(err) {
+		// The server no longer honours the stored token: a revocation, an
+		// admin's allow-reenroll, or a database restored from before our
+		// enrollment. Dropping it makes the next tick re-enroll with the
+		// fleet secret — the designed way back, with no one logging on to
+		// the poste. A machine still revoked is refused *there* (403) and
+		// simply keeps backing off until an admin allows it again.
+		log.Printf("agent: token no longer accepted by the server, dropping it to re-enroll")
+		a.dropToken()
+	}
+	return err
+}
+
+// isUnauthorized reports whether err wraps an HTTP 401 from the server.
+func isUnauthorized(err error) bool {
+	var se *api.StatusError
+	return errors.As(err, &se) && se.StatusCode == http.StatusUnauthorized
+}
+
+// dropToken forgets the per-machine token, in memory and on disk.
+func (a *Agent) dropToken() {
+	a.cfg.AuthToken = ""
+	a.client.SetToken("")
+	if err := config.ClearToken(filepath.Dir(a.cfgPath)); err != nil {
+		log.Printf("agent: clear stored token: %v", err)
+	}
 }
 
 // ensureEnrolled performs trust-on-first-use enrollment if no token is stored.
