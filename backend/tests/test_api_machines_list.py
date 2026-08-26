@@ -198,6 +198,181 @@ async def test_filters_still_apply_across_pages(client, db_session):
     assert len(body["items"]) == 2
 
 
+async def test_search_finds_a_poste_by_mac_whatever_the_notation(client, db_session):
+    """The MAC on screen comes from a switch or ipconfig, not from this console.
+
+    Stored colon-separated, but an administrator pastes it hyphenated (Windows),
+    dotted (Cisco) or bare — every notation must land on the same poste.
+    """
+    now = datetime.now(UTC)
+    await _machines(
+        db_session,
+        [
+            {
+                "machine_uuid": "mac-1",
+                "hostname": "PC-MAC",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "last_seen": now,
+            },
+            {"machine_uuid": "mac-2", "hostname": "PC-OTHER", "last_seen": now},
+        ],
+    )
+    headers = await _admin_headers(client, db_session)
+
+    for term in ("aa-bb-cc", "AABB.CC", "aa:bb:cc:dd:ee:ff", "ddeeff"):
+        resp = await client.get(f"/api/v1/machines?search={term}", headers=headers)
+        assert [m["machine_uuid"] for m in resp.json()["items"]] == ["mac-1"], term
+
+
+async def test_a_hostname_search_still_matches_hostnames_not_macs(client, db_session):
+    """ "PC-01" is not hex once stripped: the MAC leg must not swallow it."""
+    now = datetime.now(UTC)
+    await _machines(
+        db_session,
+        [
+            {"machine_uuid": "host-1", "hostname": "PC-01", "last_seen": now},
+            {
+                "machine_uuid": "host-2",
+                "hostname": "SRV-9",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "last_seen": now,
+            },
+        ],
+    )
+    headers = await _admin_headers(client, db_session)
+
+    resp = await client.get("/api/v1/machines?search=PC-01", headers=headers)
+
+    assert [m["machine_uuid"] for m in resp.json()["items"]] == ["host-1"]
+
+
+async def test_os_filter_gathers_every_build_of_a_version(client, db_session):
+    now = datetime.now(UTC)
+    await _machines(
+        db_session,
+        [
+            {"machine_uuid": "os-1", "os_version": "Windows 11 23H2", "last_seen": now},
+            {"machine_uuid": "os-2", "os_version": "Windows 11 24H2", "last_seen": now},
+            {"machine_uuid": "os-3", "os_version": "Windows 10 22H2", "last_seen": now},
+        ],
+    )
+    headers = await _admin_headers(client, db_session)
+
+    resp = await client.get("/api/v1/machines?os_version=Windows 11", headers=headers)
+
+    body = resp.json()
+    assert body["total"] == 2
+    assert {m["machine_uuid"] for m in body["items"]} == {"os-1", "os-2"}
+
+
+async def test_os_versions_lists_the_fleet_most_widespread_first(client, db_session):
+    """The dropdown's data, with the silent postes (NULL/empty) left out."""
+    now = datetime.now(UTC)
+    await _machines(
+        db_session,
+        [
+            {
+                "machine_uuid": "osv-1",
+                "os_version": "Windows 11 23H2",
+                "last_seen": now,
+            },
+            {
+                "machine_uuid": "osv-2",
+                "os_version": "Windows 11 23H2",
+                "last_seen": now,
+            },
+            {
+                "machine_uuid": "osv-3",
+                "os_version": "Windows 10 22H2",
+                "last_seen": now,
+            },
+            {"machine_uuid": "osv-4", "os_version": None, "last_seen": now},
+            {"machine_uuid": "osv-5", "os_version": "", "last_seen": now},
+        ],
+    )
+    headers = await _admin_headers(client, db_session)
+
+    resp = await client.get("/api/v1/machines/os-versions", headers=headers)
+
+    assert resp.status_code == 200
+    assert resp.json() == [
+        {"name": "Windows 11 23H2", "count": 2},
+        {"name": "Windows 10 22H2", "count": 1},
+    ]
+
+
+# --- scan freshness ----------------------------------------------------------
+
+
+async def _scan_fleet(db_session) -> None:
+    """Four postes: freshly scanned, quick-stale, full-stale, never scanned."""
+    now = datetime.now(UTC)
+    fresh = now - timedelta(days=1)
+    stale = now - timedelta(days=10)
+    await _machines(
+        db_session,
+        [
+            {
+                "machine_uuid": "scan-fresh",
+                "last_quick_scan": fresh,
+                "last_full_scan": fresh,
+                "last_seen": now,
+            },
+            {
+                "machine_uuid": "scan-quick-stale",
+                "last_quick_scan": stale,
+                "last_full_scan": fresh,
+                "last_seen": now,
+            },
+            {
+                "machine_uuid": "scan-full-stale",
+                "last_quick_scan": fresh,
+                "last_full_scan": stale,
+                "last_seen": now,
+            },
+            {"machine_uuid": "scan-never", "last_seen": now},
+        ],
+    )
+
+
+async def test_scan_filter_selects_the_overdue_postes_per_scan_type(client, db_session):
+    """Each scan type is its own axis, and "both" is their intersection."""
+    await _scan_fleet(db_session)
+    headers = await _admin_headers(client, db_session)
+
+    expected = {
+        "quick": {"scan-quick-stale", "scan-never"},
+        "full": {"scan-full-stale", "scan-never"},
+        "both": {"scan-never"},
+    }
+    for scan_type, uuids in expected.items():
+        resp = await client.get(
+            f"/api/v1/machines?scan_type={scan_type}", headers=headers
+        )
+        assert {m["machine_uuid"] for m in resp.json()["items"]} == uuids, scan_type
+
+
+async def test_a_never_scanned_poste_is_overdue_at_any_cutoff(client, db_session):
+    """NULL is further behind than any date — the poste the filter exists for."""
+    await _scan_fleet(db_session)
+    headers = await _admin_headers(client, db_session)
+
+    resp = await client.get(
+        "/api/v1/machines?scan_type=quick&scan_older_than_days=30", headers=headers
+    )
+
+    # At 30 days the 10-day-old scan is recent enough; only the silent one stays.
+    assert {m["machine_uuid"] for m in resp.json()["items"]} == {"scan-never"}
+
+
+async def test_an_unknown_scan_type_is_refused(client, db_session):
+    headers = await _admin_headers(client, db_session)
+
+    resp = await client.get("/api/v1/machines?scan_type=deep", headers=headers)
+
+    assert resp.status_code == 422
+
+
 # --- duplicates -------------------------------------------------------------
 
 

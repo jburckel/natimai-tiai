@@ -8,7 +8,7 @@
         dense
         outlined
         debounce="300"
-        placeholder="Nom, IP, antivirus ou UUID…"
+        placeholder="Nom, IP, MAC, antivirus ou UUID…"
         class="col-auto"
         style="min-width: 260px"
         @update:model-value="pushQuery"
@@ -58,6 +58,28 @@
         style="width: 210px"
         @update:model-value="pushQuery"
       />
+      <q-select
+        v-model="scan"
+        :options="scanOptions"
+        emit-value
+        map-options
+        dense
+        outlined
+        class="col-auto"
+        style="width: 200px"
+        @update:model-value="pushQuery"
+      />
+      <q-select
+        v-model="os"
+        :options="osOptions"
+        emit-value
+        map-options
+        dense
+        outlined
+        class="col-auto"
+        style="width: 200px"
+        @update:model-value="pushQuery"
+      />
       <q-toggle
         v-model="threatsOnly"
         dense
@@ -65,6 +87,12 @@
         class="col-auto"
         @update:model-value="pushQuery"
       />
+      <div v-if="lastRefreshedAt" class="text-caption text-grey col-auto">
+        Actualisé à {{ lastRefreshLabel }}
+      </div>
+      <q-btn flat round icon="refresh" :loading="loading" class="col-auto" @click="reload">
+        <q-tooltip>{{ autoRefreshHint }}</q-tooltip>
+      </q-btn>
     </div>
 
     <div v-if="selected.length" class="row items-center q-mb-sm">
@@ -174,19 +202,21 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useQuasar, type QTableColumn } from 'quasar';
-import { useAutoRefresh } from 'src/composables/useAutoRefresh';
+import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from 'src/composables/useAutoRefresh';
 import {
   listAntivirusProducts,
   listMachines,
+  listOsVersions,
   wakeMachines,
   wakeNotification,
   type ListMachinesParams,
   type Machine,
   type MachineSortField,
   type MachineStatus,
+  type ScanFilter,
   type WindowsUpdateFilter,
 } from 'src/services/machines';
 import {
@@ -200,6 +230,8 @@ import {
   DEFAULT_PAGE_SIZE,
   MACHINE_STATUSES,
   PAGE_SIZE_OPTIONS,
+  SCAN_AGE_DAYS,
+  SCAN_FILTERS,
   WU_FILTERS,
   queryValue,
 } from 'src/utils/machineQuery';
@@ -229,8 +261,12 @@ const loading = ref(false);
 const search = ref('');
 const domain = ref('');
 const antivirus = ref<string | null>(null);
+const os = ref<string | null>(null);
 const status = ref<MachineStatus | null>(null);
 const wu = ref<WindowsUpdateFilter | null>(null);
+// One token "<type>:<days>" (e.g. "quick:7"): the dropdown speaks in one value,
+// the URL and the server in a scan type and an age — split at the boundaries.
+const scan = ref<string | null>(null);
 const threatsOnly = ref(false);
 
 /** Sortable columns ↔ their API field: the table speaks in column names, the
@@ -280,6 +316,25 @@ const wuOptions = [
   { label: 'MAJ Windows requises', value: 'pending' },
   { label: 'Redémarrage requis', value: 'reboot_required' },
 ];
+
+// « > 1 sem. » / « > 1 mois » : the two questions asked of a scan date. A
+// never-run scan counts as overdue server-side — those are the postes the
+// filter exists to surface.
+const scanOptions = [
+  { label: 'Scan AV : Tous', value: null },
+  { label: 'Scan rapide > 1 sem.', value: 'quick:7' },
+  { label: 'Scan rapide > 1 mois', value: 'quick:30' },
+  { label: 'Scan complet > 1 sem.', value: 'full:7' },
+  { label: 'Scan complet > 1 mois', value: 'full:30' },
+  { label: 'Les 2 scans > 1 sem.', value: 'both:7' },
+  { label: 'Les 2 scans > 1 mois', value: 'both:30' },
+];
+
+// Filled from the fleet like the antivirus list, and for the same reason: the
+// versions installed are data. The count doubles as a migration progress bar.
+const osOptions = ref<{ label: string; value: string | null }[]>([
+  { label: 'Tous les OS', value: null },
+]);
 
 // bulkOnly: the two diagnostics stay on the detail page. Their value is reading
 // one machine's output; fired on a selection they queue a report per poste that
@@ -368,10 +423,17 @@ function applyQuery() {
   search.value = queryValue(q.search) ?? '';
   domain.value = queryValue(q.domain) ?? '';
   antivirus.value = queryValue(q.antivirus);
+  os.value = queryValue(q.os_version);
   const s = queryValue(q.status);
   status.value = s && MACHINE_STATUSES.includes(s) ? (s as MachineStatus) : null;
   const w = queryValue(q.wu_status);
   wu.value = w && WU_FILTERS.includes(w) ? (w as WindowsUpdateFilter) : null;
+  const scanType = queryValue(q.scan_type);
+  const scanDays = Number(queryValue(q.scan_days));
+  scan.value =
+    scanType && SCAN_FILTERS.includes(scanType)
+      ? `${scanType}:${SCAN_AGE_DAYS.includes(scanDays) ? scanDays : SCAN_AGE_DAYS[0]}`
+      : null;
   threatsOnly.value = queryValue(q.with_active_threats) === 'true';
 
   const sortField = queryValue(q.sort_by);
@@ -396,8 +458,14 @@ function buildQuery(): Record<string, string> {
   if (search.value) query.search = search.value;
   if (domain.value) query.domain = domain.value;
   if (antivirus.value) query.antivirus = antivirus.value;
+  if (os.value) query.os_version = os.value;
   if (status.value) query.status = status.value;
   if (wu.value) query.wu_status = wu.value;
+  if (scan.value) {
+    const [scanType, scanDays] = scan.value.split(':');
+    query.scan_type = scanType!;
+    query.scan_days = scanDays!;
+  }
   if (threatsOnly.value) query.with_active_threats = 'true';
   const p = pagination.value;
   const field = p.sortBy ? SORT_FIELD_BY_COLUMN[p.sortBy] : undefined;
@@ -457,8 +525,14 @@ async function fetchMachines() {
   if (search.value) params.search = search.value;
   if (domain.value) params.domain = domain.value;
   if (antivirus.value) params.antivirus = antivirus.value;
+  if (os.value) params.os_version = os.value;
   if (status.value) params.status = status.value;
   if (wu.value) params.wu_status = wu.value;
+  if (scan.value) {
+    const [scanType, scanDays] = scan.value.split(':');
+    params.scan_type = scanType as ScanFilter;
+    params.scan_older_than_days = Number(scanDays);
+  }
   if (threatsOnly.value) params.with_active_threats = true;
   const field = p.sortBy ? SORT_FIELD_BY_COLUMN[p.sortBy] : undefined;
   if (field) {
@@ -491,9 +565,17 @@ async function fetchMachines() {
 // every minute, so a page left open shows postes coming online without a
 // keypress. Paused while rows are selected — a bulk action being composed must
 // not have its rows shuffled underneath it.
-const { refreshNow } = useAutoRefresh(fetchMachines, {
+const { lastRefreshedAt, refreshNow } = useAutoRefresh(fetchMachines, {
   paused: () => selected.value.length > 0,
 });
+
+const lastRefreshLabel = computed(() =>
+  lastRefreshedAt.value ? lastRefreshedAt.value.toLocaleTimeString('fr-FR') : '',
+);
+
+const autoRefreshHint = `Actualiser — automatique toutes les ${Math.round(
+  AUTO_REFRESH_INTERVAL_MS / 1000,
+)} s, en pause pendant une sélection`;
 
 /** The user-visible load: spinner on, and the auto-refresh countdown restarts
  * so the next background tick lands a full period away. */
@@ -516,6 +598,18 @@ async function loadAntivirusOptions() {
   } catch {
     // A filter that failed to populate must not blank the machine list: the
     // dropdown simply keeps its "Tous antivirus" entry.
+  }
+}
+
+async function loadOsOptions() {
+  try {
+    const versions = await listOsVersions();
+    osOptions.value = [
+      { label: 'Tous les OS', value: null },
+      ...versions.map((v) => ({ label: `${v.name} (${v.count})`, value: v.name })),
+    ];
+  } catch {
+    // Same contract as the antivirus dropdown: degrade to "Tous les OS".
   }
 }
 
@@ -570,5 +664,6 @@ onMounted(() => {
   applyQuery();
   void reload();
   void loadAntivirusOptions();
+  void loadOsOptions();
 });
 </script>

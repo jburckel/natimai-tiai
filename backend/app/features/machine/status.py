@@ -11,6 +11,7 @@ aggregates.
 import enum
 from datetime import datetime, timedelta
 
+from sqlalchemy import and_, or_
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
@@ -154,3 +155,39 @@ def windows_update_clause(wu: WindowsUpdateFilter) -> ColumnElement[bool]:
             return col(Machine.wu_pending_count) > 0
         case WindowsUpdateFilter.REBOOT_REQUIRED:
             return col(Machine.wu_reboot_required).is_(True)
+
+
+class ScanFilter(enum.StrEnum):
+    """Console scan-freshness filters for the machine list.
+
+    A third axis next to ``MachineStatus`` and ``WindowsUpdateFilter``: "which
+    postes have not been *scanned* lately" is a different question from "whose
+    signatures are stale", and the two must stay combinable. ``BOTH`` means both
+    scans are overdue at once — the postes nothing has looked at in any way.
+    """
+
+    QUICK = "quick"
+    FULL = "full"
+    BOTH = "both"
+
+
+def _scan_overdue(column: datetime | None, cutoff: datetime) -> ColumnElement[bool]:
+    """One scan column being older than ``cutoff`` — NULL included.
+
+    NULL qualifies deliberately: a poste that *never* ran the scan is further
+    behind than any dated one, and the filter exists to find postes to act on.
+    """
+    return or_(col(column).is_(None), col(column) < cutoff)
+
+
+def scan_clause(scan: ScanFilter, cutoff: datetime) -> ColumnElement[bool]:
+    """Build the SQL predicate selecting machines whose scans predate ``cutoff``."""
+    quick = _scan_overdue(Machine.last_quick_scan, cutoff)
+    full = _scan_overdue(Machine.last_full_scan, cutoff)
+    match scan:
+        case ScanFilter.QUICK:
+            return quick
+        case ScanFilter.FULL:
+            return full
+        case ScanFilter.BOTH:
+            return and_(quick, full)

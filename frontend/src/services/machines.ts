@@ -8,6 +8,13 @@ export type MachineStatus = 'up_to_date' | 'outdated' | 'needs_verification' | '
  */
 export type WindowsUpdateFilter = 'pending' | 'reboot_required';
 
+/**
+ * Scan-freshness facet of the machine list: which Defender scan is overdue.
+ * A third axis next to the antivirus and Windows Update ones — the filters
+ * combine. 'both' selects postes where quick *and* full scans are overdue.
+ */
+export type ScanFilter = 'quick' | 'full' | 'both';
+
 export interface Machine {
   id: string;
   machine_uuid: string;
@@ -128,12 +135,19 @@ export type MachineSortField =
   | 'last_seen';
 
 export interface ListMachinesParams {
+  /** Free search: hostname, UUID, IP, antivirus name — and MAC in any notation. */
   search?: string;
   domain?: string;
   /** Antivirus name, matched as a substring server-side. */
   antivirus?: string;
+  /** OS version, matched as a substring server-side ("Windows 10" = every build). */
+  os_version?: string;
   status?: MachineStatus;
   wu_status?: WindowsUpdateFilter;
+  /** Only machines whose scan(s) of `scan_type` predate `scan_older_than_days`. */
+  scan_type?: ScanFilter;
+  /** Age threshold for `scan_type`, in days; the server defaults to 7. */
+  scan_older_than_days?: number;
   /** true = only machines with at least one active threat. */
   with_active_threats?: boolean;
   /** Server-side sort; omitted = freshest contact first. */
@@ -161,6 +175,22 @@ export interface AntivirusProduct {
  */
 export async function listAntivirusProducts(): Promise<AntivirusProduct[]> {
   const { data } = await api.get<AntivirusProduct[]>('/machines/antivirus-products');
+  return data;
+}
+
+/** One OS version present in the fleet, with how many machines report it. */
+export interface OsVersion {
+  name: string;
+  count: number;
+}
+
+/**
+ * OS versions found across the fleet, most widespread first. Feeds the machine
+ * list's OS filter dropdown, and the counts double as a migration progress bar
+ * ("how many postes are still on Windows 10").
+ */
+export async function listOsVersions(): Promise<OsVersion[]> {
+  const { data } = await api.get<OsVersion[]>('/machines/os-versions');
   return data;
 }
 

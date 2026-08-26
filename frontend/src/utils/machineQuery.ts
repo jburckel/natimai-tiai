@@ -3,6 +3,7 @@ import type {
   ListMachinesParams,
   MachineSortField,
   MachineStatus,
+  ScanFilter,
   WindowsUpdateFilter,
 } from 'src/services/machines';
 
@@ -35,6 +36,16 @@ export const MACHINE_STATUSES: readonly string[] = [
 
 export const WU_FILTERS: readonly string[] = ['pending', 'reboot_required'];
 
+export const SCAN_FILTERS: readonly string[] = ['quick', 'full', 'both'];
+
+/**
+ * Age thresholds the scan filter offers, in days — and the only ones a URL may
+ * ask for. Two rather than a free integer: "> 1 semaine" and "> 1 mois" are the
+ * questions an administrator actually asks, and a bounded set keeps the URL
+ * round-trippable into the dropdown that wrote it.
+ */
+export const SCAN_AGE_DAYS: readonly number[] = [7, 30];
+
 export const MACHINE_SORT_FIELDS: readonly string[] = [
   'hostname',
   'domain',
@@ -66,10 +77,20 @@ export function machineListParamsFromQuery(q: LocationQuery): ListMachinesParams
   if (domain) params.domain = domain;
   const antivirus = queryValue(q.antivirus);
   if (antivirus) params.antivirus = antivirus;
+  const os = queryValue(q.os_version);
+  if (os) params.os_version = os;
   const status = queryValue(q.status);
   if (status && MACHINE_STATUSES.includes(status)) params.status = status as MachineStatus;
   const wu = queryValue(q.wu_status);
   if (wu && WU_FILTERS.includes(wu)) params.wu_status = wu as WindowsUpdateFilter;
+  const scan = queryValue(q.scan_type);
+  if (scan && SCAN_FILTERS.includes(scan)) {
+    params.scan_type = scan as ScanFilter;
+    // The age only means something next to a scan type; sent even at the
+    // server's own default so the reading does not depend on the two agreeing.
+    const days = Number(queryValue(q.scan_days));
+    params.scan_older_than_days = SCAN_AGE_DAYS.includes(days) ? days : SCAN_AGE_DAYS[0]!;
+  }
   if (queryValue(q.with_active_threats) === 'true') params.with_active_threats = true;
   const sort = queryValue(q.sort_by);
   if (sort && MACHINE_SORT_FIELDS.includes(sort)) {
