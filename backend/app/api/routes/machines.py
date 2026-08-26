@@ -1,18 +1,19 @@
 """Console-facing endpoints: list and inspect managed machines."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, computed_field
 from sqlalchemy import case, exists, func, or_
-from sqlalchemy.sql.elements import UnaryExpression
+from sqlalchemy.sql.elements import ColumnElement, UnaryExpression
 from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep, require_permission
 from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
+from app.features.audit import crud as audit
 from app.features.base import utcnow
 from app.features.command.models import Command, CommandStatus, CommandType
 from app.features.machine import crud as machine_crud
@@ -20,8 +21,10 @@ from app.features.machine.fingerprint import trustworthy_smbios_uuid
 from app.features.machine.models import Machine
 from app.features.machine.status import (
     MachineStatus,
+    ScanFilter,
     WindowsUpdateFilter,
     is_online,
+    scan_clause,
     status_clause,
     windows_update_clause,
 )
@@ -183,40 +186,69 @@ def _sort_clause(field: MachineSortField, descending: bool) -> UnaryExpression[A
     return ordered.nulls_last()
 
 
+# Characters a hand-typed MAC may carry between its bytes (Windows hyphenates,
+# Cisco dots) — stripped before matching against the stored colon form.
+_MAC_SEARCH_STRIP = str.maketrans("", "", ":-. ")
+
+
+def _search_clause(search: str) -> ColumnElement[bool]:
+    """The free-search predicate: hostname, UUID, IP, antivirus — and MAC.
+
+    The MAC leg compares hex-only forms on both sides, so "AA-BB-CC" and
+    "aabb.cc" find the stored "AA:BB:CC:…" — the value on screen is whatever
+    tool the administrator read it from (a switch, ipconfig), never this
+    console's own notation. Only added when the term reads as hex at all: a
+    hostname search must not pay for a REPLACE() over the whole fleet.
+    """
+    pattern = f"%{search}%"
+    clauses = [
+        col(Machine.hostname).ilike(pattern),
+        col(Machine.machine_uuid).ilike(pattern),
+        # Searchable too: going from an address in a firewall or DHCP
+        # log back to the machine is the everyday use of this field.
+        col(Machine.ip_address).ilike(pattern),
+        # And from a vendor name: "which postes still run the antivirus
+        # we are migrating off?" is the question a mixed parc asks.
+        col(Machine.av_product_name).ilike(pattern),
+    ]
+    compact = search.translate(_MAC_SEARCH_STRIP)
+    try:
+        int(compact, 16)
+    except ValueError:
+        pass
+    else:
+        clauses.append(
+            func.replace(col(Machine.mac_address), ":", "").ilike(f"%{compact}%")
+        )
+    return or_(*clauses)
+
+
 @router.get("", response_model=MachineList)
 async def list_machines(
     session: SessionDep,
     search: str | None = None,
     domain: str | None = None,
     antivirus: str | None = None,
+    os_version: str | None = None,
     status: MachineStatus | None = None,
     wu_status: WindowsUpdateFilter | None = None,
+    scan_type: ScanFilter | None = None,
+    scan_older_than_days: int = Query(7, ge=1),
     with_active_threats: bool | None = None,
     sort_by: MachineSortField | None = None,
     sort_desc: bool = True,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> MachineList:
-    """List machines with optional search/domain/antivirus/status filters, plus
-    the two facets the dashboard cards link to: Windows Update state and the
-    presence of an active threat. Sortable on the console list's own columns;
-    the default order is freshest contact first.
+    """List machines with optional search/domain/antivirus/OS/status filters,
+    plus the two facets the dashboard cards link to (Windows Update state and
+    the presence of an active threat) and a scan-freshness facet — which postes
+    no quick/full scan has visited within ``scan_older_than_days``. Sortable on
+    the console list's own columns; the default order is freshest contact first.
     """
     stmt = select(Machine)
     if search:
-        pattern = f"%{search}%"
-        stmt = stmt.where(
-            or_(
-                col(Machine.hostname).ilike(pattern),
-                col(Machine.machine_uuid).ilike(pattern),
-                # Searchable too: going from an address in a firewall or DHCP
-                # log back to the machine is the everyday use of this field.
-                col(Machine.ip_address).ilike(pattern),
-                # And from a vendor name: "which postes still run the antivirus
-                # we are migrating off?" is the question a mixed parc asks.
-                col(Machine.av_product_name).ilike(pattern),
-            )
-        )
+        stmt = stmt.where(_search_clause(search))
     if domain:
         stmt = stmt.where(col(Machine.domain) == domain)
     if antivirus:
@@ -225,10 +257,18 @@ async def list_machines(
         # "ESET Endpoint Security" too — vendors rename their products between
         # versions and a parc runs several at once.
         stmt = stmt.where(col(Machine.av_product_name).ilike(f"%{antivirus}%"))
+    if os_version:
+        # Substring like the antivirus filter, and for the same reason: the
+        # dropdown feeds exact values, but "Windows 10" typed by hand must
+        # gather every build of it.
+        stmt = stmt.where(col(Machine.os_version).ilike(f"%{os_version}%"))
     if status is not None:
         stmt = stmt.where(status_clause(status, utcnow(), settings.INACTIVE_AFTER_DAYS))
     if wu_status is not None:
         stmt = stmt.where(windows_update_clause(wu_status))
+    if scan_type is not None:
+        cutoff = utcnow() - timedelta(days=scan_older_than_days)
+        stmt = stmt.where(scan_clause(scan_type, cutoff))
     if with_active_threats is not None:
         # Same definition as the dashboard's "avec menaces" KPI: at least one
         # threat Defender has not dealt with. False selects the complement.
@@ -289,6 +329,43 @@ async def list_antivirus_products(session: SessionDep) -> list[AntivirusProduct]
         # `if product` narrows away the NULL the SQL already excluded.
         for product, count in rows.all()
         if product
+    ]
+
+
+class OsVersion(BaseModel):
+    """One OS version present in the fleet, with how many machines report it."""
+
+    name: str
+    count: int
+
+
+# Declared before ``/{machine_id}`` like the antivirus listing: FastAPI matches
+# in declaration order, and "os-versions" would otherwise be read as an id.
+@router.get("/os-versions", response_model=list[OsVersion])
+async def list_os_versions(session: SessionDep) -> list[OsVersion]:
+    """OS versions reported across the fleet, most widespread first.
+
+    Feeds the console's OS filter dropdown, on the same reasoning as the
+    antivirus one: which versions run on the parc is fleet data, not a list a
+    client can hardcode — and the counts double as a migration progress bar
+    ("how many postes are still on Windows 10").
+
+    Machines that never reported an OS (NULL or empty) are left out: an absence
+    is not a version to filter on.
+    """
+    name = col(Machine.os_version)
+    rows = await session.exec(
+        select(name, func.count().label("count"))
+        .where(name.is_not(None))
+        .where(name != "")
+        .group_by(name)
+        .order_by(func.count().desc(), name)
+    )
+    return [
+        OsVersion(name=version, count=count)
+        # `if version` narrows away the NULL the SQL already excluded.
+        for version, count in rows.all()
+        if version
     ]
 
 

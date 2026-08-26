@@ -25,8 +25,11 @@ describe('machineListParamsFromQuery', () => {
       search: 'pc-01',
       domain: 'CORP',
       antivirus: 'ESET',
+      os_version: 'Windows 11 23H2',
       status: 'outdated',
       wu_status: 'pending',
+      scan_type: 'quick',
+      scan_days: '30',
       with_active_threats: 'true',
       sort_by: 'hostname',
       sort_desc: 'false',
@@ -36,8 +39,11 @@ describe('machineListParamsFromQuery', () => {
       search: 'pc-01',
       domain: 'CORP',
       antivirus: 'ESET',
+      os_version: 'Windows 11 23H2',
       status: 'outdated',
       wu_status: 'pending',
+      scan_type: 'quick',
+      scan_older_than_days: 30,
       with_active_threats: true,
       sort_by: 'hostname',
       sort_desc: false,
@@ -53,10 +59,26 @@ describe('machineListParamsFromQuery', () => {
     const params = machineListParamsFromQuery({
       status: 'on-fire',
       wu_status: 'whenever',
+      scan_type: 'deep',
       sort_by: 'hashed_password',
     });
 
     expect(params).toEqual({});
+  });
+
+  it('falls back to a week when the scan age is missing or hand-edited', () => {
+    expect(machineListParamsFromQuery({ scan_type: 'full' })).toEqual({
+      scan_type: 'full',
+      scan_older_than_days: 7,
+    });
+    expect(machineListParamsFromQuery({ scan_type: 'full', scan_days: '9999' })).toEqual({
+      scan_type: 'full',
+      scan_older_than_days: 7,
+    });
+  });
+
+  it('ignores a scan age with no scan type to apply it to', () => {
+    expect(machineListParamsFromQuery({ scan_days: '30' })).toEqual({});
   });
 
   it('defaults a sort to descending, as the table does', () => {

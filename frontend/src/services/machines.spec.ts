@@ -11,6 +11,7 @@ import {
   getMachine,
   listAntivirusProducts,
   listMachines,
+  listOsVersions,
   mergeMachines,
   allowReenroll,
   revokeToken,
@@ -88,6 +89,25 @@ describe('listAntivirusProducts', () => {
 
     expect(api.get).toHaveBeenCalledWith('/machines/antivirus-products');
     expect(result).toEqual(products);
+  });
+});
+
+describe('listOsVersions', () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+  });
+
+  it('fetches the OS versions present in the fleet', async () => {
+    const versions = [
+      { name: 'Windows 11 23H2', count: 40 },
+      { name: 'Windows 10 22H2', count: 7 },
+    ];
+    vi.mocked(api.get).mockResolvedValue({ data: versions });
+
+    const result = await listOsVersions();
+
+    expect(api.get).toHaveBeenCalledWith('/machines/os-versions');
+    expect(result).toEqual(versions);
   });
 });
 

@@ -66,6 +66,20 @@ async def client(engine):
     app.dependency_overrides.clear()
 
 
+@pytest_asyncio.fixture(autouse=True)
+def _fresh_rate_limits():
+    """Forget rate-limit state between tests.
+
+    The limiters are process-global, and every API test logs in from the same
+    test client IP: without this, the login budget (10 per 5 min) runs out ten
+    tests into the suite and everything after fails 429.
+    """
+    from app.core import ratelimit
+
+    ratelimit.reset_all()
+    yield
+
+
 @pytest_asyncio.fixture
 async def db_session(engine):
     """Direct session on the test database (for asserting persisted state)."""
