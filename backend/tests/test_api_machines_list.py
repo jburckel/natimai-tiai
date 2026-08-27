@@ -198,6 +198,65 @@ async def test_filters_still_apply_across_pages(client, db_session):
     assert len(body["items"]) == 2
 
 
+async def test_online_filter_splits_the_fleet_on_the_heartbeat_window(
+    client, db_session
+):
+    """`online=true` keeps the postes whose agent is phoning home right now.
+
+    Same window as the per-row `is_online` dot (OFFLINE_AFTER_SECONDS, 180 by
+    default): the list a filter shows must be exactly the rows whose dot is
+    green. `online=false` selects the complement — the postes a wake targets.
+    """
+    now = datetime.now(UTC)
+    await _machines(
+        db_session,
+        [
+            {"machine_uuid": "on-1", "last_seen": now - timedelta(seconds=30)},
+            {"machine_uuid": "on-2", "last_seen": now - timedelta(seconds=170)},
+            {"machine_uuid": "off-1", "last_seen": now - timedelta(seconds=600)},
+            {"machine_uuid": "off-2", "last_seen": now - timedelta(days=40)},
+        ],
+    )
+    headers = await _admin_headers(client, db_session)
+
+    resp = await client.get("/api/v1/machines?online=true", headers=headers)
+    body = resp.json()
+    assert body["total"] == 2
+    assert {m["machine_uuid"] for m in body["items"]} == {"on-1", "on-2"}
+    assert all(m["is_online"] for m in body["items"])
+
+    resp = await client.get("/api/v1/machines?online=false", headers=headers)
+    body = resp.json()
+    assert body["total"] == 2
+    assert {m["machine_uuid"] for m in body["items"]} == {"off-1", "off-2"}
+
+
+async def test_online_filter_combines_with_the_antivirus_status(client, db_session):
+    """The everyday question: outdated *and* on, so a scan sent now will land."""
+    now = datetime.now(UTC)
+    await _machines(
+        db_session,
+        [
+            {"machine_uuid": "on-late", "last_seen": now, "is_up_to_date": False},
+            {"machine_uuid": "on-ok", "last_seen": now, "is_up_to_date": True},
+            {
+                "machine_uuid": "off-late",
+                "last_seen": now - timedelta(hours=2),
+                "is_up_to_date": False,
+            },
+        ],
+    )
+    headers = await _admin_headers(client, db_session)
+
+    resp = await client.get(
+        "/api/v1/machines?online=true&status=outdated", headers=headers
+    )
+
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["machine_uuid"] == "on-late"
+
+
 async def test_search_finds_a_poste_by_mac_whatever_the_notation(client, db_session):
     """The MAC on screen comes from a switch or ipconfig, not from this console.
 

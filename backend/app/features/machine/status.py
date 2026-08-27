@@ -106,6 +106,21 @@ def is_online(last_seen: datetime, now: datetime, offline_after_seconds: int) ->
     return (now - last_seen).total_seconds() < offline_after_seconds
 
 
+def online_clause(
+    online: bool, now: datetime, offline_after_seconds: int
+) -> ColumnElement[bool]:
+    """SQL predicate for ``is_online``, asked of the whole fleet at once.
+
+    The same window as the per-row property above — one definition of "on",
+    whether the console reads a dot or filters a list. ``False`` selects the
+    complement: the postes to wake, not merely the ones not to bother.
+    """
+    cutoff = now - timedelta(seconds=offline_after_seconds)
+    if online:
+        return col(Machine.last_seen) >= cutoff
+    return col(Machine.last_seen) < cutoff
+
+
 class MachineStatus(enum.StrEnum):
     """Console status filters (also usable as command broadcast targets)."""
 

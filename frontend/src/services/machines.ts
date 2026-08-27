@@ -143,6 +143,8 @@ export interface ListMachinesParams {
   /** OS version, matched as a substring server-side ("Windows 10" = every build). */
   os_version?: string;
   status?: MachineStatus;
+  /** true = only postes on right now (heartbeat within the online window). */
+  online?: boolean;
   wu_status?: WindowsUpdateFilter;
   /** Only machines whose scan(s) of `scan_type` predate `scan_older_than_days`. */
   scan_type?: ScanFilter;

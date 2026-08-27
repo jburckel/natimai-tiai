@@ -24,6 +24,7 @@ from app.features.machine.status import (
     ScanFilter,
     WindowsUpdateFilter,
     is_online,
+    online_clause,
     scan_clause,
     status_clause,
     windows_update_clause,
@@ -231,6 +232,7 @@ async def list_machines(
     antivirus: str | None = None,
     os_version: str | None = None,
     status: MachineStatus | None = None,
+    online: bool | None = None,
     wu_status: WindowsUpdateFilter | None = None,
     scan_type: ScanFilter | None = None,
     scan_older_than_days: int = Query(7, ge=1),
@@ -264,6 +266,13 @@ async def list_machines(
         stmt = stmt.where(col(Machine.os_version).ilike(f"%{os_version}%"))
     if status is not None:
         stmt = stmt.where(status_clause(status, utcnow(), settings.INACTIVE_AFTER_DAYS))
+    if online is not None:
+        # Its own axis, not a MachineStatus value: "allumé maintenant" must stay
+        # combinable with the antivirus statuses — the everyday question is
+        # "which postes are outdated *and* on, so a scan sent now will land".
+        stmt = stmt.where(
+            online_clause(online, utcnow(), settings.OFFLINE_AFTER_SECONDS)
+        )
     if wu_status is not None:
         stmt = stmt.where(windows_update_clause(wu_status))
     if scan_type is not None:

@@ -92,6 +92,7 @@ export function machineListParamsFromQuery(q: LocationQuery): ListMachinesParams
     params.scan_older_than_days = SCAN_AGE_DAYS.includes(days) ? days : SCAN_AGE_DAYS[0]!;
   }
   if (queryValue(q.with_active_threats) === 'true') params.with_active_threats = true;
+  if (queryValue(q.online) === 'true') params.online = true;
   const sort = queryValue(q.sort_by);
   if (sort && MACHINE_SORT_FIELDS.includes(sort)) {
     params.sort_by = sort as MachineSortField;
