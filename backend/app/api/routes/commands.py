@@ -34,7 +34,11 @@ class CreateCommands(BaseModel):
     """
 
     type: CommandType
-    ttl_minutes: int = Field(default=60, ge=1, le=60 * 24 * 30)
+    # Omitted, the deployment decides: COMMAND_DEFAULT_TTL_MINUTES. The default
+    # is not spelled out here because a Pydantic default is frozen at import,
+    # and publishing it in the OpenAPI schema would give it as *the* applied
+    # value on a server that applies another one.
+    ttl_minutes: int | None = Field(default=None, ge=1, le=60 * 24 * 30)
     machine_ids: list[uuid.UUID] | None = None
     target_all: bool = False
     target_domain: str | None = None
@@ -135,7 +139,10 @@ async def create_commands(
     # must not block the one an administrator is queueing now, on a poste that
     # was simply off the whole time.
     await command_crud.mark_expired(session)
-    expires_at = utcnow() + timedelta(minutes=payload.ttl_minutes)
+    ttl_minutes = payload.ttl_minutes
+    if ttl_minutes is None:
+        ttl_minutes = settings.COMMAND_DEFAULT_TTL_MINUTES
+    expires_at = utcnow() + timedelta(minutes=ttl_minutes)
     created, skipped = await command_crud.create_for_machines(
         session,
         machine_ids=machine_ids,
