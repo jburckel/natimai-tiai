@@ -44,6 +44,21 @@ class Settings(BaseSettings):
     # Shared secret deployed by GPO; only authorizes POST /agent/enroll.
     ENROLLMENT_SECRET: str = "changeme-enrollment-secret"
 
+    # --- Remote commands ---
+    # How long a queued command stays valid when the request does not carry its
+    # own ``ttl_minutes``. Past it, a command *still pending* is expired: it is
+    # never handed to an agent again, so a poste powered back on weeks later does
+    # not run what was asked of it in the meantime. An hour is ample for a poste
+    # that is on — the agent beats every 60 s; raise it on a parc whose postes
+    # are only on intermittently, lower it where a command is worth nothing
+    # outside the moment it was queued. Only PENDING commands are swept: once
+    # delivered, the command belongs to the agent.
+    #
+    # Bounded like the request field (1 min → 30 d), and here rather than on the
+    # route so that a mistyped `.env` refuses to boot instead of failing every
+    # queueing call.
+    COMMAND_DEFAULT_TTL_MINUTES: int = Field(default=60, ge=1, le=60 * 24 * 30)
+
     # --- Rate limiting ---
     # Escape hatch, not a tuning knob: the per-endpoint budgets live with the
     # limiters (app.core.ratelimit). Off only for a deployment whose operators

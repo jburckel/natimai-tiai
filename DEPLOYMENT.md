@@ -194,6 +194,7 @@ Il n'est jamais committé.
 | `SIGNATURE_MAX_AGE_DAYS` | `3` | Seuil « signatures à jour » |
 | `INACTIVE_AFTER_DAYS` | `30` | Seuil « poste inactif » |
 | `OFFLINE_AFTER_SECONDS` | `180` | Seuil « poste allumé » : 3 × l'intervalle de heartbeat de l'agent, pour qu'un battement manqué n'éteigne pas le parc. À relever avec lui sur un parc plus lent |
+| `COMMAND_DEFAULT_TTL_MINUTES` | `60` | Durée de vie d'une commande mise en file. Passé ce délai, une commande **encore en attente** est périmée et n'est plus remise à un agent — un poste rallumé trois semaines plus tard ne rejoue pas ce qu'on lui avait demandé. À allonger sur un parc dont les postes ne sont allumés que par intermittence |
 
 ### Réveil des postes (Wake-on-LAN)
 

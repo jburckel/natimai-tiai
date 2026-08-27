@@ -31,6 +31,7 @@ describe('machineListParamsFromQuery', () => {
       scan_type: 'quick',
       scan_days: '30',
       with_active_threats: 'true',
+      online: 'true',
       sort_by: 'hostname',
       sort_desc: 'false',
     });
@@ -45,6 +46,7 @@ describe('machineListParamsFromQuery', () => {
       scan_type: 'quick',
       scan_older_than_days: 30,
       with_active_threats: true,
+      online: true,
       sort_by: 'hostname',
       sort_desc: false,
     });
@@ -91,6 +93,13 @@ describe('machineListParamsFromQuery', () => {
   it('only enables the threat filter on an explicit true', () => {
     expect(machineListParamsFromQuery({ with_active_threats: 'false' })).toEqual({});
     expect(machineListParamsFromQuery({ with_active_threats: '1' })).toEqual({});
+  });
+
+  it('only enables the online filter on an explicit true', () => {
+    // The toggle only ever writes `online=true`; anything else in a URL is
+    // hand-edited and degrades to the unfiltered list.
+    expect(machineListParamsFromQuery({ online: 'false' })).toEqual({});
+    expect(machineListParamsFromQuery({ online: '1' })).toEqual({});
   });
 });
 

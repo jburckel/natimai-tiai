@@ -1,6 +1,6 @@
 <template>
   <q-page padding>
-    <div class="row items-center q-col-gutter-sm q-mb-md">
+    <div class="row items-center q-col-gutter-sm q-mb-sm">
       <div class="text-h5 col-auto">Postes</div>
       <q-space />
       <q-input
@@ -15,71 +15,18 @@
       >
         <template #append><q-icon name="search" /></template>
       </q-input>
-      <!--< q-input
-        v-model="domain"
+      <!-- The two everyday facets stay on the bar: "on right now" and "carrying
+           an active threat" are asked on the way to an action, and a toggle
+           costs a glance where a dropdown costs a read. -->
+      <q-toggle
+        v-model="onlineOnly"
         dense
-        outlined
-        debounce="300"
-        placeholder="Domaine"
+        label="Allumés"
         class="col-auto"
-        style="width: 160px"
         @update:model-value="pushQuery"
-      /> -->
-      <q-select
-        v-model="antivirus"
-        :options="antivirusOptions"
-        emit-value
-        map-options
-        dense
-        outlined
-        class="col-auto"
-        style="width: 200px"
-        @update:model-value="pushQuery"
-      />
-      <q-select
-        v-model="status"
-        :options="statusOptions"
-        emit-value
-        map-options
-        dense
-        outlined
-        class="col-auto"
-        style="width: 190px"
-        @update:model-value="pushQuery"
-      />
-      <q-select
-        v-model="wu"
-        :options="wuOptions"
-        emit-value
-        map-options
-        dense
-        outlined
-        class="col-auto"
-        style="width: 210px"
-        @update:model-value="pushQuery"
-      />
-      <q-select
-        v-model="scan"
-        :options="scanOptions"
-        emit-value
-        map-options
-        dense
-        outlined
-        class="col-auto"
-        style="width: 200px"
-        @update:model-value="pushQuery"
-      />
-      <q-select
-        v-model="os"
-        :options="osOptions"
-        emit-value
-        map-options
-        dense
-        outlined
-        class="col-auto"
-        style="width: 200px"
-        @update:model-value="pushQuery"
-      />
+      >
+        <q-tooltip>Postes allumés — agent en contact ces dernières minutes</q-tooltip>
+      </q-toggle>
       <q-toggle
         v-model="threatsOnly"
         dense
@@ -87,12 +34,104 @@
         class="col-auto"
         @update:model-value="pushQuery"
       />
+      <q-btn
+        flat
+        dense
+        no-caps
+        icon="filter_list"
+        label="Filtres"
+        class="col-auto"
+        @click="filtersOpen = !filtersOpen"
+      >
+        <q-badge v-if="!filtersOpen && filterChips.length" color="primary" floating>
+          {{ filterChips.length }}
+        </q-badge>
+      </q-btn>
       <div v-if="lastRefreshedAt" class="text-caption text-grey col-auto">
         Actualisé à {{ lastRefreshLabel }}
       </div>
       <q-btn flat round icon="refresh" :loading="loading" class="col-auto" @click="reload">
         <q-tooltip>{{ autoRefreshHint }}</q-tooltip>
       </q-btn>
+    </div>
+
+    <!-- The five dropdowns, folded by default: each is reached for now and
+         then, and a bar wearing all of them at once buried the search. -->
+    <q-slide-transition>
+      <div v-show="filtersOpen" class="row items-center q-col-gutter-sm q-mb-sm">
+        <q-select
+          v-model="antivirus"
+          :options="antivirusOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          class="col-auto"
+          style="width: 200px"
+          @update:model-value="pushQuery"
+        />
+        <q-select
+          v-model="status"
+          :options="statusOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          class="col-auto"
+          style="width: 190px"
+          @update:model-value="pushQuery"
+        />
+        <q-select
+          v-model="wu"
+          :options="wuOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          class="col-auto"
+          style="width: 210px"
+          @update:model-value="pushQuery"
+        />
+        <q-select
+          v-model="scan"
+          :options="scanOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          class="col-auto"
+          style="width: 200px"
+          @update:model-value="pushQuery"
+        />
+        <q-select
+          v-model="os"
+          :options="osOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          class="col-auto"
+          style="width: 200px"
+          @update:model-value="pushQuery"
+        />
+      </div>
+    </q-slide-transition>
+
+    <!-- A folded filter must never narrow the list silently — the dashboard
+         cards land here with one already set. Chips name the active ones, and
+         removing one clears it without opening the panel. -->
+    <div v-if="!filtersOpen && filterChips.length" class="row items-center q-mb-sm">
+      <q-chip
+        v-for="chip in filterChips"
+        :key="chip.key"
+        removable
+        dense
+        color="primary"
+        text-color="white"
+        @remove="clearFilter(chip.key)"
+      >
+        {{ chip.label }}
+      </q-chip>
     </div>
 
     <div v-if="selected.length" class="row items-center q-mb-sm">
@@ -268,6 +307,11 @@ const wu = ref<WindowsUpdateFilter | null>(null);
 // the URL and the server in a scan type and an age — split at the boundaries.
 const scan = ref<string | null>(null);
 const threatsOnly = ref(false);
+const onlineOnly = ref(false);
+
+// UI state, not query state: the panel starts folded even when a filter is
+// active — the chips under the bar say what is filtering instead.
+const filtersOpen = ref(false);
 
 /** Sortable columns ↔ their API field: the table speaks in column names, the
  * URL and the server in field names. */
@@ -335,6 +379,30 @@ const scanOptions = [
 const osOptions = ref<{ label: string; value: string | null }[]>([
   { label: 'Tous les OS', value: null },
 ]);
+
+type FilterKey = 'antivirus' | 'status' | 'wu' | 'scan' | 'os';
+
+/** The folded filters currently narrowing the list, as chip labels. The label
+ * is looked up in the dropdown's own options, so a chip always reads exactly
+ * like the entry that set it. */
+const filterChips = computed<{ key: FilterKey; label: string }[]>(() => {
+  const label = (opts: { label: string; value: string | null }[], v: string) =>
+    opts.find((o) => o.value === v)?.label ?? v;
+  const chips: { key: FilterKey; label: string }[] = [];
+  if (antivirus.value)
+    chips.push({ key: 'antivirus', label: label(antivirusOptions.value, antivirus.value) });
+  if (status.value) chips.push({ key: 'status', label: label(statusOptions, status.value) });
+  if (wu.value) chips.push({ key: 'wu', label: label(wuOptions, wu.value) });
+  if (scan.value) chips.push({ key: 'scan', label: label(scanOptions, scan.value) });
+  if (os.value) chips.push({ key: 'os', label: label(osOptions.value, os.value) });
+  return chips;
+});
+
+function clearFilter(key: FilterKey) {
+  const refs = { antivirus, status, wu, scan, os };
+  refs[key].value = null;
+  pushQuery();
+}
 
 // bulkOnly: the two diagnostics stay on the detail page. Their value is reading
 // one machine's output; fired on a selection they queue a report per poste that
@@ -435,6 +503,7 @@ function applyQuery() {
       ? `${scanType}:${SCAN_AGE_DAYS.includes(scanDays) ? scanDays : SCAN_AGE_DAYS[0]}`
       : null;
   threatsOnly.value = queryValue(q.with_active_threats) === 'true';
+  onlineOnly.value = queryValue(q.online) === 'true';
 
   const sortField = queryValue(q.sort_by);
   const sortColumn = sortField ? COLUMN_BY_SORT_FIELD[sortField] : undefined;
@@ -467,6 +536,7 @@ function buildQuery(): Record<string, string> {
     query.scan_days = scanDays!;
   }
   if (threatsOnly.value) query.with_active_threats = 'true';
+  if (onlineOnly.value) query.online = 'true';
   const p = pagination.value;
   const field = p.sortBy ? SORT_FIELD_BY_COLUMN[p.sortBy] : undefined;
   if (field && !(field === 'last_seen' && p.descending)) {
@@ -534,6 +604,7 @@ async function fetchMachines() {
     params.scan_older_than_days = Number(scanDays);
   }
   if (threatsOnly.value) params.with_active_threats = true;
+  if (onlineOnly.value) params.online = true;
   const field = p.sortBy ? SORT_FIELD_BY_COLUMN[p.sortBy] : undefined;
   if (field) {
     params.sort_by = field;

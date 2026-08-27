@@ -151,6 +151,10 @@ et un accès réseau au serveur.
   redémarrage — les seules actions qui puissent coûter son travail à un
   utilisateur — sont en outre rationnés par l'agent lui-même, sur le poste, hors
   de portée du serveur.
+- **Commandes périssables** : une commande non distribuée expire au bout d'une
+  heure — délai réglable — et n'est plus jamais remise à un agent. Un poste
+  rallumé après trois semaines ne rejoue pas ce qu'on lui avait demandé
+  entre-temps ([cycle de vie](backend/README.md#cycle-de-vie-dune-commande)).
 - **Binaire agent signé** par le certificat de l'AC interne.
 
 Pour signaler une vulnérabilité, contactez
