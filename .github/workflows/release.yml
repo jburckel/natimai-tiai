@@ -48,10 +48,10 @@ jobs:
       version: ${{ steps.version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: agent/go.mod
           cache-dependency-path: agent/go.sum
@@ -102,7 +102,7 @@ jobs:
           sha256sum *.exe | tee SHA256SUMS.txt
 
       - name: Artefact de build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tiai-agent-exe-${{ steps.version.outputs.version }}
           path: dist/
@@ -121,10 +121,10 @@ jobs:
       WIX_VERSION: "7.0.0"
 
     steps:
-      - uses: actions/checkout@v4 # pour deploy/msi/Package.wxs
+      - uses: actions/checkout@v7 # pour deploy/msi/Package.wxs
 
       - name: Récupérer les .exe
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tiai-agent-exe-${{ needs.agent.outputs.version }}
           path: dist
@@ -177,7 +177,7 @@ jobs:
           done
 
       - name: Artefact de build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tiai-agent-msi-${{ needs.agent.outputs.version }}
           path: dist/*.msi
@@ -190,12 +190,12 @@ jobs:
     needs: [agent, msi]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # --generate-notes a besoin de l'historique des tags
 
       - name: Rassembler les binaires
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: tiai-agent-*-${{ needs.agent.outputs.version }}
           merge-multiple: true
