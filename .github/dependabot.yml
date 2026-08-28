@@ -1,0 +1,85 @@
+# Mises à jour de dépendances automatisées.
+#
+# Le dépôt a trois écosystèmes verrouillés (uv.lock, package-lock.json, go.sum)
+# plus les actions de la CI — chacun a son bloc ci-dessous. Dependabot ouvre une
+# PR par groupe, que la CI valide comme n'importe quelle autre.
+#
+# Les mises à jour de sécurité (Dependabot alerts) ignorent `schedule` et
+# `open-pull-requests-limit` : elles sont ouvertes dès la publication de l'avis.
+version: 2
+
+updates:
+  # ── Backend Python (uv) ────────────────────────────────────────────────────
+  - package-ecosystem: uv
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(backend)"
+    groups:
+      # Les patchs/mineures passent en un lot : elles sont sans risque dans les
+      # bornes de pyproject.toml et la CI (ruff, mypy, pytest) les tranche.
+      backend-mineures:
+        patterns: ["*"]
+        update-types: [minor, patch]
+      # Les majeures restent séparées : chacune demande une relecture propre.
+      backend-majeures:
+        patterns: ["*"]
+        update-types: [major]
+
+  # ── Frontend (npm) ─────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(frontend)"
+    groups:
+      frontend-mineures:
+        patterns: ["*"]
+        update-types: [minor, patch]
+      frontend-majeures:
+        patterns: ["*"]
+        update-types: [major]
+    ignore:
+      # @types/node suit la version de Node ciblée (`engines`, setup-node@22),
+      # pas la dernière publiée : une majeure ici décrit des API absentes du
+      # runtime réel.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+
+  # ── Agent Windows (Go) ─────────────────────────────────────────────────────
+  - package-ecosystem: gomod
+    directory: /agent
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(agent)"
+    groups:
+      agent-modules:
+        patterns: ["*"]
+
+  # ── Actions GitHub (ci.yml, release.yml) ───────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      timezone: Europe/Paris
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(ci)"
+    groups:
+      actions:
+        patterns: ["*"]

@@ -10,8 +10,8 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
@@ -39,18 +39,36 @@ def verify_token(token: str, token_hash: str) -> bool:
 
 # --- Console users (password + JWT) ----------------------------------------
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 ALGORITHM = "HS256"
+
+# bcrypt only ever reads the first 72 bytes of a password. passlib, which this
+# module used to go through, cut the rest off silently; the `bcrypt` API raises
+# instead. The cut therefore stays here, or every account whose password is
+# longer than that would stop verifying against the hash stored before the
+# switch. Bytes, not characters: bcrypt works on the UTF-8 encoding, and a cut
+# landing mid-codepoint is harmless because the value is never decoded back.
+_BCRYPT_MAX_BYTES = 72
+
+
+def _password_bytes(password: str) -> bytes:
+    return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
 
 
 def get_password_hash(password: str) -> str:
-    """Hash a plaintext password (bcrypt)."""
-    return pwd_context.hash(password)
+    """Hash a plaintext password (bcrypt, 12 rounds)."""
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plaintext password against its bcrypt hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return bcrypt.checkpw(
+            _password_bytes(plain_password), hashed_password.encode("utf-8")
+        )
+    except ValueError:
+        # Row holds something that isn't a bcrypt hash (truncated column, hand-
+        # edited value). That is a failed login, not a 500 on the login route.
+        return False
 
 
 def generate_password() -> str:

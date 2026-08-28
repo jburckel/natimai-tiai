@@ -11,7 +11,9 @@ export default defineConfig({
     },
   },
   // Tests are self-contained: don't inherit the Quasar tsconfig preset.
-  esbuild: {
+  // `oxc`, not `esbuild`: Vite 8 transforms with oxc and ignores the esbuild
+  // options entirely (it only warns when both are set).
+  oxc: {
     tsconfigRaw: '{}',
   },
   test: {

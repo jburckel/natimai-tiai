@@ -1,4 +1,6 @@
-import { defineConfig } from '#q-app/wrappers';
+import { fileURLToPath } from 'node:url';
+
+import { defineConfig } from '#q-app';
 
 export default defineConfig(() => {
   return {
@@ -7,7 +9,18 @@ export default defineConfig(() => {
     extras: ['material-icons'],
 
     build: {
-      target: { browser: ['es2022'], node: 'node20' },
+      // app-vite 3 a ramené les alias par défaut au seul `@` → src/. Les
+      // conventions du projet sont rétablies ici plutôt que réécrites sur les
+      // 56 imports concernés : elles sont orthogonales à la montée de version,
+      // et `build.alias` est prévu pour ça — il alimente Vite comme les
+      // `paths` du tsconfig généré.
+      alias: {
+        src: fileURLToPath(new URL('./src', import.meta.url)),
+        boot: fileURLToPath(new URL('./src/boot', import.meta.url)),
+        pages: fileURLToPath(new URL('./src/pages', import.meta.url)),
+        layouts: fileURLToPath(new URL('./src/layouts', import.meta.url)),
+      },
+      target: { browser: ['es2022'], node: 'node22' },
       typescript: { strict: true, vueShim: true },
       vueRouterMode: 'history',
       // API base URL injected at build time (overridable via env).
