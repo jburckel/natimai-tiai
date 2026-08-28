@@ -42,10 +42,10 @@ jobs:
       GIST_SECRET: ${{ secrets.GIST_SECRET }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -69,7 +69,7 @@ jobs:
         if: >-
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
-        uses: MishaKav/pytest-coverage-comment@4a4889e6085d4e19fd19bf4a763c83d5332c8d06 # v1.9.0
+        uses: MishaKav/pytest-coverage-comment@d46d9d594f3e1d11008ed19939deb7a139b18751 # v1.11.1
         with:
           title: Couverture backend
           pytest-xml-coverage-path: backend/coverage.xml
@@ -82,7 +82,7 @@ jobs:
 
       - name: Coverage badge (gist)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GIST_SECRET != ''
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@v1.9.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
           gistID: 80b72bc52448a36bc1a08370a68c88a1
@@ -101,10 +101,10 @@ jobs:
         working-directory: agent
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: agent/go.mod
           cache-dependency-path: agent/go.sum
@@ -140,10 +140,10 @@ jobs:
       GIST_SECRET: ${{ secrets.GIST_SECRET }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -179,7 +179,7 @@ jobs:
       - name: Coverage badge (gist)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GIST_SECRET != ''
         continue-on-error: true
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@v1.9.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
           gistID: 80b72bc52448a36bc1a08370a68c88a1
