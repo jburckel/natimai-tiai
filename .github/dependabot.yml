@@ -23,13 +23,13 @@ updates:
     groups:
       # Les patchs/mineures passent en un lot : elles sont sans risque dans les
       # bornes de pyproject.toml et la CI (ruff, mypy, pytest) les tranche.
+      #
+      # Les majeures ne sont volontairement pas groupées : sans groupe qui les
+      # capte, Dependabot ouvre une PR par mise à jour. Une majeure infusable
+      # ne peut donc pas retenir les autres en otage dans la même PR.
       backend-mineures:
         patterns: ["*"]
         update-types: [minor, patch]
-      # Les majeures restent séparées : chacune demande une relecture propre.
-      backend-majeures:
-        patterns: ["*"]
-        update-types: [major]
 
   # ── Frontend (npm) ─────────────────────────────────────────────────────────
   - package-ecosystem: npm
@@ -43,17 +43,22 @@ updates:
     commit-message:
       prefix: "deps(frontend)"
     groups:
+      # Majeures non groupées, une PR chacune — voir le commentaire du backend.
       frontend-mineures:
         patterns: ["*"]
         update-types: [minor, patch]
-      frontend-majeures:
-        patterns: ["*"]
-        update-types: [major]
     ignore:
       # @types/node suit la version de Node ciblée (`engines`, setup-node@22),
       # pas la dernière publiée : une majeure ici décrit des API absentes du
       # runtime réel.
       - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+      # TypeScript 7 est le portage natif en Go : son paquet n'expose plus
+      # `typescript/lib/tsc`, or vue-tsc type-checke les composants `.vue` en
+      # instrumentant précisément ce compilateur JS. `vue-tsc --noEmit` échoue
+      # en ERR_PACKAGE_PATH_NOT_EXPORTED, et aucun réglage n'y change rien.
+      # À rouvrir quand l'écosystème Vue aura un type-checker adossé à tsgo.
+      - dependency-name: "typescript"
         update-types: [version-update:semver-major]
 
   # ── Agent Windows (Go) ─────────────────────────────────────────────────────
