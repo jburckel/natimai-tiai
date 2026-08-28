@@ -29,12 +29,7 @@ export type CommandType =
   | 'net_config';
 
 export type CommandStatus =
-  | 'pending'
-  | 'delivered'
-  | 'running'
-  | 'succeeded'
-  | 'failed'
-  | 'expired';
+  'pending' | 'delivered' | 'running' | 'succeeded' | 'failed' | 'expired';
 
 export type CommandGroup = 'defender' | 'windows_update' | 'power' | 'maintenance' | 'diagnostic';
 

@@ -2,6 +2,7 @@
 // This composable is driven by the router and needs a component to live in, so
 // it is the one spec that wants a DOM. The suite as a whole stays on `node` —
 // see vitest.config.ts.
+import type { AxiosRequestConfig } from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick } from 'vue';
 import { createRouter, createMemoryHistory } from 'vue-router';
@@ -37,8 +38,10 @@ function machine(id: string) {
 
 /** Answer /machines with one row, keyed by the requested page. */
 function respondWith(rowsByPage: Record<number, unknown>, total: number) {
-  vi.mocked(api.get).mockImplementation((_url: string, config?: { params?: { page?: number } }) => {
-    const page = config?.params?.page ?? 1;
+  // `config` must be typed as axios sees it (parameters are contravariant),
+  // so the page is narrowed from `params` rather than declared on the way in.
+  vi.mocked(api.get).mockImplementation((_url: string, config?: AxiosRequestConfig) => {
+    const page = (config?.params as { page?: number } | undefined)?.page ?? 1;
     const row = rowsByPage[page];
     return Promise.resolve({ data: { items: row ? [row] : [], total, page, page_size: 1 } });
   });
