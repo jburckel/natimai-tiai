@@ -455,6 +455,12 @@ Cadrée et livrée : cf. `plan-phase2-windows-update.md`. Réutilise l'agent et 
 > **Wake-on-LAN vérifié côté code** : émission, adressage (masque remonté par le poste, repli configuré), messages honnêtes — tout passe (`test_wol_unit` + `test_api_power_wol`). Un réveil qui ne part pas en production se joue en dehors du code : `bc_forwarding` sur l'hôte Docker (RFC 2644, cf. DEPLOYMENT.md §3), démarrage rapide Windows, BIOS/carte — la procédure de vérification `tcpdump` est dans DEPLOYMENT.md.
 > Vérifications : **328 tests backend** verts sur Postgres 16 (8 ajoutés : MAC multi-notations, filtre OS, `os-versions`, fraîcheur des scans par type et par seuil, 422 sur type inconnu), ruff format/check + mypy strict verts ; **149 vitest** (+5), `vue-tsc` et `prettier` verts.
 
+**Instantané — 2026-08-28** · **Remise en phase du suivi avec le code** : trois chantiers avaient été livrés sans instantané, le tableau ci-dessous les comptait encore comme restants.
+> **Rate-limiting livré** (`app/core/ratelimit.py`) : fenêtre glissante en mémoire process (deque de timestamps monotones par IP, sans verrou — les dépendances FastAPI tournent sur l'event loop), balayage des clés au-delà de 1024 pour qu'un attaquant qui tourne ses adresses coûte une fenêtre de mémoire, pas la vie du processus. Trois surfaces : login (10 / 5 min), demande de réinitialisation (5 / 15 min), enrôlement agent (30 / 5 min — le limiteur passe **avant** la validation du secret, pour qu'une force brute du secret paie le 429). `reset_all()` branché en fixture autouse du conftest (cf. régression du 2026-08-26).
+> **Journal d'audit livré, couverture encore étroite** : table `audit_log` (migration `0013_audit_log`), `audit.record` écrit dans la transaction de l'appelant, lecture console `GET /audit` (admin, filtres action / ressource, paginé). Deux actions tracées à ce jour — révocation de token et ré-autorisation d'enrôlement, les deux gestes de sécurité irréversibles à distance. Les commandes portaient déjà `created_by` (« qui a lancé quel scan » était couvert depuis M3). Reste l'élargissement (comptes, fusion, actions de masse) et une page console du journal.
+> **Packaging M6 largement livré** : workflow `release.yml` (tag `v*` → `.exe` x64/arm64 cross-compilés sur Linux + `.msi` WiX construits sur runner Windows + `SHA256SUMS.txt`, noms versionnés et fixes), installateur MSI (`deploy/msi/Package.wxs` : service TiaiAgent, relance sur échec, désinstallation standard), script de démarrage GPO idempotent (`deploy/gpo/Install-TiaiAgent.ps1`, comparaison SHA-256, mise à jour du binaire et réapplication des réglages à chaque boot), documentation d'exploitation (DEPLOYMENT.md : modes TLS, secrets, sauvegardes / restauration, WoL, paramètres agent, dépannage ; README GPO et MSI). Restent la **signature de code** (aucun `signtool` dans la chaîne : les binaires publiés sont non signés) et le DoD sur OU pilote.
+> Au passage, deux ajouts récents non consignés : **TTL des commandes configurable** (`COMMAND_TTL_SECONDS`, cycle de vie documenté dans `backend/README.md`) et **filtre « Postes allumés »** + barre de filtres repliable sur la liste des postes.
+
 | Jalon | État |
 |---|---|
 | M0 Fondations | 🟢 fini (compose validé de bout en bout) — reste le certificat de signature |
@@ -464,8 +470,8 @@ Cadrée et livrée : cf. `plan-phase2-windows-update.md`. Réutilise l'agent et 
 | M4 Console | 🟢 login JWT + dashboard KPI/alertes + filtres + détail poste + actions de masse + révocation + fusion de postes + catalogue d'actions factorisé (sections + confirmations + dialog Résultat) |
 | Commandes de maintenance | 🟢 catalogue fermé de 11 commandes (maintenance + diagnostic) de bout en bout : types backend, exécution agent, console ; statut `running` câblé. Reste la validation en `LocalSystem` des huit commandes exigeant l'élévation (cf. `plan-commandes-distantes.md` §5) |
 | Phase 2 Windows Update | 🟢 état WU remonté (MAJ en attente, redémarrage requis, dates) + 4 commandes de bout en bout : cycle lent dédié côté agent, table `windows_updates` à sémantique de remplacement, carte + tableau + KPI côté console. Reste la validation sur poste réel d'une installation effective et d'un redémarrage |
-| M5 Durcissement | 🟡 JWT + rôles, provider Mailgun, notifications par compte (digest quotidien + alerte immédiate) via l'outbox e-mail et le worker, garde secrets prod, timing-safe enroll, en-têtes sécurité ; reste audit, rotation, rate-limit |
-| M6 Packaging & GPO | ⬜ à faire |
+| M5 Durcissement | 🟡 JWT + rôles, provider Mailgun, notifications par compte (digest quotidien + alerte immédiate) via l'outbox e-mail et le worker, garde secrets prod, timing-safe enroll, en-têtes sécurité, rate-limit (login / reset / enroll), journal d'audit (2 actions tracées + lecture console) ; reste rotation des tokens, élargissement de l'audit + page console |
+| M6 Packaging & GPO | 🟡 release `.exe` + `.msi`, script GPO, doc d'exploitation ; reste signature de code et validation OU pilote |
 | Transverse | 🟢 tests backend/frontend + ruff + mypy + CI (tous verts) |
 
 **M0 — Fondations**
@@ -560,9 +566,18 @@ Cadrée et livrée : cf. `plan-phase2-windows-update.md`. Réutilise l'agent et 
 - [x] Logs agent : fichier `agent.log` (rotation simple, `.old` > 5 Mio) + niveau `log_level` INFO/DEBUG enfin branché ; chemin nominal loggé (démarrage, identité, enrôlement, heartbeat, commandes + durée) — indispensable en mode service où stderr est perdu ; validé sur poste réel contre la stack dev (enrôlement + heartbeats visibles dans le fichier et machine visible console)
 - [x] Notifications e-mail branchées : cadence par compte (aucun / alerte immédiate / résumé si évènement / résumé quotidien, défaut résumé quotidien), digest posé sur un cron ARQ quotidien, alerte immédiate émise en tâche de fond depuis le heartbeat sur les seules détections *nouvelles* (`xmax = 0`) et récentes ; destinataires lus dans `users` — `ALERT_RECIPIENTS` supprimé, la console n'a plus de liste de diffusion hors base
 - [x] **Outbox e-mail + retrait d'ARQ/Redis** (2026-08-20, cf. §2.11) : tout e-mail (alerte, digest, réinitialisation) est écrit dans `email_outbox` **dans la transaction de l'appelant** — l'alerte de menace part désormais de la transaction du heartbeat même, plus d'une tâche de fond — puis envoyé par le worker avec reprises (backoff 1 min → 1 h, `EMAIL_MAX_ATTEMPTS`, statut `abandoned` conservé avec la dernière erreur, purge après `EMAIL_OUTBOX_RETENTION_DAYS`). Motivé par un envoi perdu sur erreur de proxy sortant. Le worker ARQ est remplacé par une boucle asyncio (`app/core/worker.py`) portant les trois tâches périodiques existantes ; services `redis` et dépendances `arq`/`redis` supprimés. Migration `0012_email_outbox` ; 319 tests verts sur Postgres, chaîne Alembic vérifiée up/down/up
-- [ ] Journal d'audit ; rotation tokens ; rate-limiting
+- [x] Rate-limiting (2026-08-28) : fenêtre glissante en mémoire process (`app/core/ratelimit.py`) sur login (10 / 5 min), demande de réinitialisation (5 / 15 min) et enrôlement agent (30 / 5 min, limiteur avant la validation du secret) ; `reset_all()` en fixture autouse des tests
+- [x] Journal d'audit (2026-08-28) : migration `0013_audit_log`, `audit.record` dans la transaction de l'appelant, lecture console `GET /audit` (admin, filtres, paginé) ; tracées : révocation de token, ré-autorisation d'enrôlement — les commandes portent `created_by` depuis M3
+- [ ] Élargir la couverture d'audit (comptes, fusion de postes, actions de masse) + page console du journal
+- [ ] Rotation automatique des tokens agents
 
-**M6 — Packaging & GPO** · ⬜ à faire
+**M6 — Packaging & GPO** · 🟡 packaging et vecteurs de déploiement livrés ; reste la signature et le pilote
+- [x] Workflow de release (`.github/workflows/release.yml`) : tag `v*` → `.exe` windows/amd64 + arm64 cross-compilés, `.msi` WiX construits sur runner Windows, `SHA256SUMS.txt`, noms versionnés et fixes attachés à la release
+- [x] Installateur MSI (`deploy/msi/Package.wxs` + `build.ps1`) : service TiaiAgent (démarrage auto, relance sur échec), désinstallation standard, README
+- [x] Script de démarrage GPO (`deploy/gpo/Install-TiaiAgent.ps1`) : idempotent (SHA-256), mise à jour du binaire et réapplication des réglages à chaque boot, README (partage, GPO, registre)
+- [x] Documentation d'exploitation : DEPLOYMENT.md (modes TLS, secrets, variables serveur, sauvegardes/restauration, Wake-on-LAN, paramètres agent, dépannage)
+- [ ] **Signature du binaire et du MSI** (certificat de l'AC interne, `signtool` dans la chaîne de release) + distribution du certificat en *Éditeurs approuvés* par GPO — les binaires publiés aujourd'hui sont non signés
+- [ ] **DoD** : agent signé déployé et reconnu de confiance sur un OU pilote
 
 **Transverse**
 - [x] Tests backend (`pytest` : sécurité, permissions, empreinte ; API sur Postgres de test)
