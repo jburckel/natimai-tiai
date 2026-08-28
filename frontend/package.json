@@ -1,7 +1,7 @@
 {
   "name": "tiai-frontend",
   "version": "0.1.0",
-  "description": "Tiai \u2014 console web de supervision",
+  "description": "Tiai — console web de supervision",
   "productName": "Tiai",
   "author": "Natimai",
   "type": "module",
@@ -32,9 +32,9 @@
     "@vue/test-utils": "^2.4.0",
     "jsdom": "^30.0.1",
     "prettier": "^3.3.0",
-    "typescript": "^5.5.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.11",
-    "vue-tsc": "^2.0.0"
+    "vue-tsc": "^3.3.11"
   },
   "engines": {
     "node": "^22.22.0 || ^24 || ^26"
