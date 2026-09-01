@@ -20,6 +20,8 @@ export type CommandType =
   | 'wu_install'
   | 'wu_install_full'
   | 'wu_reset'
+  // Inventory (phase 3).
+  | 'inventory_scan'
   // Power: taking the poste down, and bringing it back.
   | 'reboot'
   | 'shutdown'
@@ -31,7 +33,8 @@ export type CommandType =
 export type CommandStatus =
   'pending' | 'delivered' | 'running' | 'succeeded' | 'failed' | 'expired';
 
-export type CommandGroup = 'defender' | 'windows_update' | 'power' | 'maintenance' | 'diagnostic';
+export type CommandGroup =
+  'defender' | 'windows_update' | 'inventory' | 'power' | 'maintenance' | 'diagnostic';
 
 /** A command as the console offers it: label, icon, and how it may be triggered. */
 export interface CommandAction {
@@ -66,6 +69,7 @@ export const commandGroupLabels: Record<CommandGroup, string> = {
   // the three actions that change a poste's power state are one decision family
   // and belong in one section. The « Redémarrage requis » badge on the Windows
   // Update card still says when to reach for it.
+  inventory: 'Inventaire',
   power: 'Alimentation',
   maintenance: 'Maintenance',
   diagnostic: 'Diagnostic',
@@ -143,6 +147,16 @@ export const commandActions: CommandAction[] = [
     confirm: true,
     bulk: true,
     hint: 'Procédure Microsoft : les services Windows Update sont arrêtés, le magasin de mises à jour et le cache de signatures sont renommés, puis les services repartent. Windows les reconstruit à la recherche suivante — l’historique des mises à jour du poste est perdu et les correctifs déjà téléchargés le seront à nouveau. Rien n’est installé ni redémarré.',
+  },
+  {
+    type: 'inventory_scan',
+    label: "Rafraîchir l'inventaire",
+    icon: 'inventory_2',
+    group: 'inventory',
+    // A read, and a fast one: a dozen WMI queries and two registry walks. There
+    // is nothing to warn about and nothing to undo, so no confirmation.
+    confirm: false,
+    bulk: true,
   },
   {
     // Never automatic, whatever a poste reports as needing one: restarting a

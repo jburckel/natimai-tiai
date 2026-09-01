@@ -92,15 +92,14 @@ async def set_password(session: AsyncSession, user: User, password: str) -> None
 
 
 async def delete_user(session: AsyncSession, user: User) -> None:
-    """Delete a user and any reset token issued to them.
+    """Delete a user; the database takes their pending reset tokens with them.
 
-    Tokens are removed explicitly rather than relying on ``ON DELETE CASCADE``:
-    the constraint exists in the migration but not in the schema SQLModel builds
-    for the tests, so leaning on it would behave differently in each.
+    The tokens used to be deleted explicitly here, because the ``ON DELETE
+    CASCADE`` existed in the migration and not in the schema SQLModel builds for
+    the tests — so leaning on it would have behaved differently in each. The
+    model now declares it too, which makes the constraint the single statement of
+    the rule instead of one of two.
     """
-    await session.exec(
-        delete(PasswordResetToken).where(col(PasswordResetToken.user_id) == user.id)
-    )
     await session.delete(user)
 
 

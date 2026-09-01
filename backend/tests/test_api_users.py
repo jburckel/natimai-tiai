@@ -226,6 +226,16 @@ async def test_delete_removes_the_account_and_its_reset_tokens(client, db_sessio
     assert resp.status_code == 204, resp.text
     assert (await _login(client, "gone@test.local", STRONG)).status_code == 401
 
+    # Asserted and not assumed: the token now goes with the account through the
+    # foreign key's ON DELETE CASCADE, where it used to be deleted by hand
+    # because the model did not declare the constraint the migration had. This
+    # line is what proves the two schemas agree.
+    from sqlmodel import select
+
+    from app.features.user.models import PasswordResetToken
+
+    assert (await db_session.exec(select(PasswordResetToken))).all() == []
+
 
 # --- Admin-driven reset ----------------------------------------------------
 

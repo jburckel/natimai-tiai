@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"tiai/agent/internal/models"
 )
 
 // rawAddress is one unicast address of one adapter, carried with the
@@ -177,4 +179,145 @@ func formatMAC(mac net.HardwareAddr) string {
 		parts = append(parts, fmt.Sprintf("%02X", b))
 	}
 	return strings.Join(parts, ":")
+}
+
+// --- Inventory view of the same adapters -------------------------------------
+//
+// A second pass over GetAdaptersAddresses, and deliberately not a widening of
+// the first. The two have opposite filters: the election above wants *candidate
+// addresses* — up, non-tunnel, routable — because it is choosing the one address
+// that names this machine on the network, while the inventory below wants *every
+// adapter the machine has*, disconnected ones included, because that is what an
+// inventory is. Merging them would mean one of the two silently changing.
+//
+// The elected address stays on the machine's own columns server-side and is not
+// derived from this list: it is re-read every 60 s because a magic packet is
+// aimed at it, where this list is a day old.
+
+// rawAdapter is one network adapter with the facts the inventory reports. Kept
+// out of the //go:build windows file so buildNics stays testable off Windows,
+// like rawAddress above.
+type rawAdapter struct {
+	Name       string // Windows' description — the adapter's model
+	MAC        net.HardwareAddr
+	IfType     uint32
+	SpeedBits  uint64 // TransmitLinkSpeed
+	Up         bool
+	DHCP       bool
+	Addresses  []net.IP
+	PrefixLens []uint8
+	Gateway    string
+}
+
+// Interface types worth naming. Everything else is "other": a PPP link, a
+// Bluetooth PAN and a tunnel are all things the console shows without
+// distinguishing.
+const (
+	ifTypeEthernet = 6
+	ifTypeWiFi     = 71
+)
+
+// nicType names the medium.
+func nicType(ifType uint32) string {
+	switch ifType {
+	case ifTypeEthernet:
+		return "ethernet"
+	case ifTypeWiFi:
+		return "wifi"
+	default:
+		return "other"
+	}
+}
+
+// unknownLinkSpeed is what Windows reports for an adapter that is not connected:
+// the maximum of a uint64, not zero. Reported as "no speed" rather than as
+// eighteen exabits per second.
+const unknownLinkSpeed = ^uint64(0)
+
+// linkSpeedMbps converts TransmitLinkSpeed to megabits, or nil when there is
+// nothing to report.
+func linkSpeedMbps(bits uint64) *int {
+	if bits == 0 || bits == unknownLinkSpeed {
+		return nil
+	}
+	mbps := int(bits / 1_000_000)
+	if mbps == 0 {
+		// A sub-megabit link — a modem, a metered tunnel. Rounded up rather than
+		// reported as zero, which would read as "no link".
+		mbps = 1
+	}
+	return &mbps
+}
+
+// buildNics maps the enumerated adapters, one row each.
+//
+// “physical“ comes from Win32_NetworkAdapter, which is the only place Windows
+// says whether an adapter is a real card: GetAdaptersAddresses has no such bit,
+// and matching descriptions against a list of hypervisor product names is the
+// heuristic this collector already refused once, for the address election. An
+// empty map makes every adapter read as physical — the safe direction, since
+// showing a Hyper-V switch as a real card is cosmetic while hiding a real card
+// is not.
+func buildNics(adapters []rawAdapter, physical map[string]bool) []models.Nic {
+	out := make([]models.Nic, 0, len(adapters))
+	for _, a := range adapters {
+		mac := formatMAC(a.MAC)
+		name := strings.TrimSpace(a.Name)
+		// The MAC when there is one, else the name: a PPP or tunnel
+		// pseudo-adapter has no hardware address, and a row still needs a key
+		// the server can upsert on.
+		key := mac
+		if key == "" {
+			key = name
+		}
+		if key == "" {
+			continue
+		}
+		nic := models.Nic{
+			Key:       key,
+			Name:      name,
+			MAC:       mac,
+			Type:      nicType(a.IfType),
+			SpeedMbps: linkSpeedMbps(a.SpeedBits),
+			IsUp:      a.Up,
+			Gateway:   a.Gateway,
+			IsVirtual: mac != "" && physical != nil && !physical[mac],
+		}
+		dhcp := a.DHCP
+		nic.IsDHCP = &dhcp
+		if ip, prefix := preferredAddress(a); ip != nil {
+			nic.IPAddress = ip.String()
+			nic.IPPrefixLength = usablePrefixLength(ip, prefix)
+		}
+		out = append(out, nic)
+	}
+	return out
+}
+
+// preferredAddress picks the address to show beside an adapter: its IPv4 if it
+// has one, else its IPv6.
+//
+// One address per adapter and not all of them, because the row is read to answer
+// "where is this card on the network" — a list of six link-local IPv6 addresses
+// answers nothing. The unusable ones (loopback, APIPA, link-local) are skipped
+// on the same reasoning as the election's.
+func preferredAddress(a rawAdapter) (net.IP, uint8) {
+	var fallback net.IP
+	var fallbackPrefix uint8
+	for i, ip := range a.Addresses {
+		if !usableAddress(ip) {
+			continue
+		}
+		var prefix uint8
+		if i < len(a.PrefixLens) {
+			prefix = a.PrefixLens[i]
+		}
+		if ip.To4() != nil {
+			return ip, prefix
+		}
+		if fallback == nil {
+			fallback, fallbackPrefix = ip, prefix
+		}
+	}
+	return fallback, fallbackPrefix
 }

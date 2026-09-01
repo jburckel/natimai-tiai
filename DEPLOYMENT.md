@@ -432,8 +432,10 @@ backoff_max_seconds: 300
 queue_max_items: 1000
 wu_collect_interval_seconds: 21600        # cycle Windows Update (6 h) — jamais dans le heartbeat
 wu_install_timeout_seconds: 7200          # budget d'une installation de MAJ (2 h)
+inventory_collect_interval_seconds: 86400 # cycle inventaire matériel/logiciel (24 h)
 log_level: INFO                           # DEBUG logge aussi les heartbeats silencieux
 report_session_username: true             # false = remonter la présence sans le nom
+report_software: true                     # false = inventaire matériel seul, sans les logiciels
 ```
 
 Toute valeur absente ou non positive retombe sur son défaut : un YAML partiel
@@ -458,12 +460,22 @@ le secret d'enrôlement, plutôt qu'en clair dans le YAML.
 | `HeartbeatIntervalSeconds` | `REG_DWORD` | `heartbeat_interval_seconds` |
 | `WUCollectIntervalSeconds` | `REG_DWORD` | `wu_collect_interval_seconds` |
 | `WUInstallTimeoutSeconds` | `REG_DWORD` | `wu_install_timeout_seconds` |
+| `InventoryCollectIntervalSeconds` | `REG_DWORD` | `inventory_collect_interval_seconds` |
 | `ReportSessionUsername` | `REG_DWORD` | `report_session_username` |
+| `ReportSoftware` | `REG_DWORD` | `report_software` |
 
 Pour les intervalles, `0` est ignoré et signifie « laisser le défaut ». Pour
-`ReportSessionUsername`, c'est la **présence de la clé** qui l'emporte : `0`
-coupe la remontée du nom de l'utilisateur connecté (la console affiche alors la
-présence sans identité), `1` la rétablit.
+`ReportSessionUsername` et `ReportSoftware`, c'est la **présence de la clé** qui
+l'emporte : `0` coupe la remontée, `1` la rétablit.
+
+`ReportSessionUsername` à `0` coupe la remontée du nom de l'utilisateur connecté
+(la console affiche alors la présence sans identité). `ReportSoftware` à `0`
+coupe l'inventaire **logiciel** : le registre n'est plus lu, l'inventaire
+matériel continue de remonter, et la liste déjà stockée côté serveur est
+**effacée** au cycle suivant — c'est ce qui rend la garantie vérifiable plutôt
+que déclarative. Les deux réglages sont à arbitrer avec le DPO / le CSE : croiser
+« quels logiciels sont installés » et « qui est connecté » porte sur une personne
+nommée.
 
 ```powershell
 New-Item -Path 'HKLM:\SOFTWARE\Tiai' -Force | Out-Null

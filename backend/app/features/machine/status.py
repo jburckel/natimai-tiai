@@ -10,8 +10,9 @@ aggregates.
 
 import enum
 from datetime import datetime, timedelta
+from typing import Any
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
@@ -206,3 +207,51 @@ def scan_clause(scan: ScanFilter, cutoff: datetime) -> ColumnElement[bool]:
             return full
         case ScanFilter.BOTH:
             return and_(quick, full)
+
+
+def disk_free_percent() -> ColumnElement[Any]:
+    """Free space on the system volume, as a percentage of its size.
+
+    Derived rather than stored, unlike the two megabyte figures it divides: a
+    percentage is a presentation of them, and storing it would be a third number
+    that can disagree with the other two.
+
+    ``nullif`` guards the division: a machine that never reported an inventory
+    has NULL there, and one that reported a zero-sized volume would divide by
+    zero. Both come out NULL, which sorts last and matches no threshold — an
+    absence is not a full disk.
+    """
+    return (
+        col(Machine.system_volume_free_mb)
+        * 100.0
+        / func.nullif(col(Machine.system_volume_total_mb), 0)
+    )
+
+
+def low_disk_clause(percent: int) -> ColumnElement[bool]:
+    """Machines whose system volume is below ``percent`` free.
+
+    Written as a multiplication rather than a division so the comparison stays
+    in integers: ``free * 100 < total * percent``. Same answer, no float, and no
+    special case for the zero-sized volume — which cannot be below a threshold
+    because it has no space to be below it with.
+
+    This is the filter behind the dashboard's "plus de place" card, and it is the
+    most actionable figure the inventory produces: a full C: is the first cause
+    of a poste that quietly stops taking Windows updates.
+    """
+    free = col(Machine.system_volume_free_mb)
+    total = col(Machine.system_volume_total_mb)
+    return and_(free.is_not(None), total > 0, free * 100 < total * percent)
+
+
+def aging_hardware_clause(now: datetime, years: int) -> ColumnElement[bool]:
+    """Machines whose BIOS predates ``years`` ago — the renewal plan's figure.
+
+    The BIOS date is the closest thing to a machine's age the poste knows: a
+    purchase date lives in an accounting system this product does not talk to,
+    and a reimaged Windows resets its own install date. NULL is excluded: never
+    reported is not old.
+    """
+    cutoff = (now - timedelta(days=365 * years)).date()
+    return col(Machine.bios_date) < cutoff

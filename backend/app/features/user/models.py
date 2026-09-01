@@ -2,6 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
+from sqlalchemy import Column, ForeignKey
 from sqlmodel import Field, SQLModel
 
 from app.features.base import utc_field, utcnow
@@ -77,7 +78,19 @@ class PasswordResetToken(SQLModel, table=True):
     __tablename__ = "password_reset_tokens"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
+    # ON DELETE CASCADE spelled out, because the migration has always had it and
+    # ``foreign_key="users.id"`` does not: the schema SQLModel builds for the
+    # tests and the migrated one used to disagree on what happens to a pending
+    # reset link when its account is deleted. ``alembic check`` is what says so.
+    #
+    # ``nullable`` and ``index`` are explicit for the same reason as in
+    # ``utc_field``: with an ``sa_column``, SQLModel stops deriving either from
+    # the annotation.
+    user_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        )
+    )
     token_hash: str = Field(unique=True, index=True)
     expires_at: datetime = utc_field()
     used_at: datetime | None = utc_field(default=None, nullable=True)

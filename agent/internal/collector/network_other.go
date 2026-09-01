@@ -11,3 +11,7 @@ import "context"
 func ReadNetwork(ctx context.Context) (NetworkInfo, error) {
 	return NetworkInfo{}, nil
 }
+
+// enumerateAdapters reports no adapters off Windows, for the same reason as
+// ReadNetwork above.
+func enumerateAdapters() ([]rawAdapter, error) { return nil, nil }

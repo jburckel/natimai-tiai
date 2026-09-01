@@ -109,6 +109,168 @@ type WUState struct {
 	Pending         []PendingUpdate `json:"pending"`
 }
 
+// --- Inventory --------------------------------------------------------------
+//
+// Dates that are dates and not instants (a BIOS date, an install date) travel
+// as "2006-01-02" strings: the server stores them in a DATE column, and a
+// midnight-UTC timestamp would shift across the date line for no reason.
+//
+// Every list below is nil-able and carries **no** omitempty, which is the whole
+// contract: nil marshals to `null` and means "not read" — the server leaves its
+// stored set alone — while an empty non-nil slice marshals to `[]` and means
+// "read, and empty", which clears it. A virtual machine genuinely has no memory
+// modules; a poste whose software collection is switched off genuinely reports
+// no software, and that has to erase what an earlier cycle stored.
+
+// MemoryModule is one physical stick, from Win32_PhysicalMemory.
+type MemoryModule struct {
+	// The bank/slot label ("DIMM A1"). The key the server upserts on: it is the
+	// only field that stays put across reboots — a serial is blank on cheap
+	// modules, and the enumeration order is not stable.
+	Slot         string `json:"slot"`
+	CapacityMB   *int   `json:"capacity_mb,omitempty"`
+	Type         string `json:"type,omitempty"` // DDR4, DDR5…
+	SpeedMHz     *int   `json:"speed_mhz,omitempty"`
+	Manufacturer string `json:"manufacturer,omitempty"`
+	Serial       string `json:"serial,omitempty"`
+	FormFactor   string `json:"form_factor,omitempty"`
+}
+
+// Disk is one physical drive.
+type Disk struct {
+	// Windows' own device id (\\.\PHYSICALDRIVE0) and not the serial: a serial
+	// is the better key right up to the machines that report none, and a blank
+	// key is not a key.
+	DeviceID string `json:"device_id"`
+	Model    string `json:"model,omitempty"`
+	Serial   string `json:"serial,omitempty"`
+	Firmware string `json:"firmware,omitempty"`
+	// SSD / HDD / NVMe / unknown. "unknown" is a real answer: Win32_DiskDrive
+	// cannot tell the two apart, and a host without the Storage WMI namespace
+	// falls back to it.
+	MediaType    string `json:"media_type,omitempty"`
+	BusType      string `json:"bus_type,omitempty"`
+	SizeMB       *int   `json:"size_mb,omitempty"`
+	HealthStatus string `json:"health_status,omitempty"`
+	IsRemovable  bool   `json:"is_removable"`
+}
+
+// Volume is one fixed logical volume. No "used" field: the server subtracts, so
+// two figures can never contradict each other about one number.
+type Volume struct {
+	Letter     string `json:"letter"` // "C:"
+	Label      string `json:"label,omitempty"`
+	Filesystem string `json:"filesystem,omitempty"`
+	TotalMB    *int   `json:"total_mb,omitempty"`
+	FreeMB     *int   `json:"free_mb,omitempty"`
+	IsSystem   bool   `json:"is_system"`
+	// BitLocker. Empty means not read — the namespace is absent on some SKUs and
+	// the class needs elevation — which the server must not read as "not
+	// encrypted": an alarm on a machine that may well be encrypted is how a
+	// dashboard gets ignored.
+	EncryptionStatus string `json:"encryption_status,omitempty"`
+}
+
+// Nic is one network adapter, from the same GetAdaptersAddresses walk that
+// elects IPAddress above — but a different pass over it, with a different
+// filter: the election wants candidates (up, non-tunnel), the inventory wants
+// every adapter the machine has, disconnected ones included.
+type Nic struct {
+	// The MAC when the adapter has one, else its name. Composed here because
+	// this is the only side that knows whether the address it read is a real
+	// one — a PPP or tunnel pseudo-adapter has none.
+	Key            string `json:"key"`
+	Name           string `json:"name,omitempty"` // Windows' description = the model
+	MAC            string `json:"mac,omitempty"`
+	Type           string `json:"type,omitempty"` // ethernet / wifi / other
+	SpeedMbps      *int   `json:"speed_mbps,omitempty"`
+	IsUp           bool   `json:"is_up"`
+	IsVirtual      bool   `json:"is_virtual"`
+	IPAddress      string `json:"ip_address,omitempty"`
+	IPPrefixLength int    `json:"ip_prefix_length,omitempty"`
+	IsDHCP         *bool  `json:"is_dhcp,omitempty"`
+	Gateway        string `json:"gateway,omitempty"`
+}
+
+// Gpu is one display adapter. Two is the common case: an iGPU and a card.
+type Gpu struct {
+	Name          string `json:"name"`
+	Chipset       string `json:"chipset,omitempty"`
+	MemoryMB      *int   `json:"memory_mb,omitempty"`
+	DriverVersion string `json:"driver_version,omitempty"`
+	DriverDate    string `json:"driver_date,omitempty"` // "2006-01-02"
+	Resolution    string `json:"resolution,omitempty"`  // "1920x1080"
+}
+
+// Software is one installed program, read from the registry's Uninstall keys
+// and never from Win32_Product — enumerating that class makes the Windows
+// Installer re-verify every installed package, which takes minutes and writes
+// an event into the Application log of every poste in the parc, every day.
+type Software struct {
+	// Name, version and publisher together are the catalogue's key server-side.
+	// Plain strings and not pointers: the server's UNIQUE constraint treats
+	// NULLs as distinct, so an absent publisher has to travel as "".
+	Name            string `json:"name"`
+	Version         string `json:"version"`
+	Publisher       string `json:"publisher"`
+	InstallDate     string `json:"install_date,omitempty"` // "2006-01-02"
+	Arch            string `json:"arch,omitempty"`         // x86 / x64
+	Source          string `json:"source,omitempty"`       // which Uninstall hive
+	InstallLocation string `json:"install_location,omitempty"`
+}
+
+// InventoryState is the heartbeat's inventory block, produced by the agent's own
+// daily cycle — and attached only when its Hash differs from the last one the
+// server acknowledged, so a stable poste reports once and then stays quiet.
+type InventoryState struct {
+	// SHA-256 of everything below, this field excluded. The server stores it and
+	// compares before writing: an agent that restarted has forgotten sending
+	// this and re-sends it, and a match lets seven set replacements be skipped.
+	Hash string `json:"hash,omitempty"`
+
+	HWManufacturer string `json:"hw_manufacturer,omitempty"`
+	HWModel        string `json:"hw_model,omitempty"`
+	HWSerial       string `json:"hw_serial,omitempty"`
+	HWChassisType  string `json:"hw_chassis_type,omitempty"`
+	HWIsVirtual    bool   `json:"hw_is_virtual"`
+	HWHypervisor   string `json:"hw_hypervisor,omitempty"`
+
+	MBManufacturer string `json:"mb_manufacturer,omitempty"`
+	MBModel        string `json:"mb_model,omitempty"`
+	MBSerial       string `json:"mb_serial,omitempty"`
+
+	BIOSVendor  string `json:"bios_vendor,omitempty"`
+	BIOSVersion string `json:"bios_version,omitempty"`
+	BIOSDate    string `json:"bios_date,omitempty"` // "2006-01-02"
+	SecureBoot  *bool  `json:"secure_boot,omitempty"`
+	TPMVersion  string `json:"tpm_version,omitempty"`
+
+	// One CPU, in fields rather than a list: a workstation is single-socket, and
+	// the rare dual-socket one carries two identical processors by construction.
+	// CPUCount says how many.
+	CPUModel        string `json:"cpu_model,omitempty"`
+	CPUManufacturer string `json:"cpu_manufacturer,omitempty"`
+	CPUCores        *int   `json:"cpu_cores,omitempty"`
+	CPUThreads      *int   `json:"cpu_threads,omitempty"`
+	CPUSpeedMHz     *int   `json:"cpu_speed_mhz,omitempty"`
+	CPUCount        *int   `json:"cpu_count,omitempty"`
+
+	RAMTotalMB    *int `json:"ram_total_mb,omitempty"`
+	RAMSlotsTotal *int `json:"ram_slots_total,omitempty"`
+	RAMSlotsUsed  *int `json:"ram_slots_used,omitempty"`
+
+	OSArchitecture string     `json:"os_architecture,omitempty"`
+	OSInstallDate  *time.Time `json:"os_install_date,omitempty"`
+	LastBootTime   *time.Time `json:"last_boot_time,omitempty"`
+
+	MemoryModules []MemoryModule `json:"memory_modules"`
+	Disks         []Disk         `json:"disks"`
+	Volumes       []Volume       `json:"volumes"`
+	Nics          []Nic          `json:"nics"`
+	Gpus          []Gpu          `json:"gpus"`
+	Software      []Software     `json:"software"`
+}
+
 // Threat mirrors the backend ThreatReport: one Defender detection. detection_id
 // is the dedup key (UNIQUE (machine_id, detection_id) server-side, plan §2.7).
 type Threat struct {
@@ -150,9 +312,12 @@ type HeartbeatRequest struct {
 	// Attached only on the heartbeats that follow a Windows Update collection —
 	// every few hours, not every minute. Absent (nil) leaves the server's stored
 	// state alone, exactly like an absent Defender block.
-	WindowsUpdate *WUState     `json:"windows_update,omitempty"`
-	Fingerprint   *Fingerprint `json:"fingerprint,omitempty"`
-	Threats       []Threat     `json:"threats,omitempty"`
+	WindowsUpdate *WUState `json:"windows_update,omitempty"`
+	// Rarer still than the block above: collected once a day, attached only when
+	// its hash changed. A stable poste sends it once and then never again.
+	Inventory   *InventoryState `json:"inventory,omitempty"`
+	Fingerprint *Fingerprint    `json:"fingerprint,omitempty"`
+	Threats     []Threat        `json:"threats,omitempty"`
 }
 
 // Command is a unit of work handed back by the server on heartbeat.

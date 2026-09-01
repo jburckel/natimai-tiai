@@ -53,6 +53,16 @@ gère naturellement les postes éteints.
   information : c'est le réglage par défaut. Chaque e-mail passe par une file en
   base et est réessayé en cas d'incident d'envoi : un courrier décidé n'est
   jamais perdu.
+- **Inventaire matériel et logiciel** — ce que chaque poste *est* : constructeur,
+  modèle, châssis, carte mère, BIOS, processeur, barrettes et emplacements
+  libres, disques (type, santé, chiffrement), volumes avec leur occupation,
+  cartes réseau, cartes graphiques. Et ce qu'il *porte* : les logiciels
+  installés, lus dans le registre comme « Applications et fonctionnalités » —
+  jamais via `Win32_Product`, dont l'énumération déclenche une vérification MSI
+  de chaque paquet sur chaque poste. Un catalogue à l'échelle du parc répond à
+  « qui a encore Java 8 » en un clic, et deux exports CSV alimentent le tableur
+  de la prochaine réunion. Collecté une fois par jour, et **envoyé seulement
+  quand quelque chose a changé**.
 - **Déploiement sans friction** — un binaire unique poussé par GPO,
   auto-enrôlement des postes, HTTPS de bout en bout.
 
@@ -92,7 +102,7 @@ l'exécution est figée dans le binaire de l'agent.
 | Maintenance & diagnostic | 🟢 Livré |
 | Windows Update | 🟢 Livré |
 | Déploiement logiciel | ⚪ À venir |
-| Inventaire matériel / logiciel | ⚪ À venir |
+| Inventaire matériel / logiciel | 🟢 Livré |
 
 ## Téléchargement
 
