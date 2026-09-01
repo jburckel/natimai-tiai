@@ -51,6 +51,10 @@ class CommandType(enum.StrEnum):
     # rather than in Maintenance because it is Windows Update it repairs, and
     # because the search that verifies it sits right beside it in the menu.
     WU_RESET = "wu_reset"
+    # Inventory (Phase 3). Forces the daily hardware/software collection to
+    # run now, instead of waiting for the cycle. A read: no confirmation.
+    INVENTORY_SCAN = "inventory_scan"
+
     # --- Power. Never triggered on the agent's own initiative, whatever it
     # reports as needing one: taking a poste down is an admin decision, taken in
     # the console behind a confirmation. The agent rations both on its own as

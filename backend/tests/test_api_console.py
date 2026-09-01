@@ -1019,8 +1019,11 @@ def test_catalogue_is_fully_covered_below():
     # `wake_on_lan` is the one value here no agent ever executes: the machine it
     # targets is off, so the server emits the packet and closes the row itself.
     power = {"reboot", "shutdown", "wake_on_lan"}
+    # Forces the daily hardware/software collection to run now. Covered by
+    # tests/test_api_inventory.py, round trip included.
+    inventory = {"inventory_scan"}
     assert {t.value for t in CommandType} == (
-        defender | windows_update | power | set(MAINTENANCE_TYPES)
+        defender | windows_update | power | inventory | set(MAINTENANCE_TYPES)
     )
 
 

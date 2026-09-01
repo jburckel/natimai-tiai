@@ -73,6 +73,18 @@ type Agent struct {
 	// running six-hourly *will* eventually land on top of an install otherwise.
 	wuOp sync.Mutex
 
+	// The hardware and software inventory, on a slower clock still: once a day,
+	// and only *sent* when it changed. inventorySent holds the hash of the last
+	// reading handed to the cache, which is what makes a stable poste quiet —
+	// see collectInventory. It is read and written under inventoryOp alone.
+	inventory     inventoryCache
+	inventorySent string
+	// Serialises the daily collection against an inventory_scan. Not shared with
+	// wuOp: the two touch nothing in common — one opens a WUA session, the other
+	// reads WMI and the registry — and one lock for both would have a six-hour
+	// Windows Update search block an inventory an administrator just asked for.
+	inventoryOp sync.Mutex
+
 	// Rations restarts and shutdowns, and holds the rest of the catalogue back
 	// once one is scheduled (power.go). The last line of defence, and the only
 	// one that runs on the machine actually being taken down.
@@ -105,6 +117,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		// is never logged, at any level.
 		log.Printf("agent: logged-on username reporting disabled (presence only)")
 	}
+	if !a.cfg.ReportsSoftware() {
+		// Traced once so the setting is auditable from the log, like the one
+		// above. What it switches off is never read, so there is nothing to
+		// redact further down.
+		log.Printf("agent: installed-software inventory disabled (hardware only)")
+	}
 
 	q, err := queue.New(filepath.Join(dir, "queue"), a.cfg.QueueMaxItems)
 	if err != nil {
@@ -120,6 +138,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.worker(ctx)
 	a.wg.Add(1)
 	go a.wuLoop(ctx)
+	a.wg.Add(1)
+	go a.inventoryLoop(ctx)
 	defer a.wg.Wait()
 
 	base := time.Duration(a.cfg.HeartbeatIntervalSeconds) * time.Second
@@ -249,6 +269,9 @@ func (a *Agent) pollOnce(ctx context.Context) error {
 	// has not acknowledged — nil on the vast majority of heartbeats, which then
 	// leave the stored Windows Update state exactly as it was.
 	wu, wuGen := a.wu.pending()
+	// Rarer still: attached on the heartbeat that follows a collection which
+	// actually found something different. On a stable poste that is once, ever.
+	inv, invGen := a.inventory.pending()
 
 	fp := a.identity.Fingerprint
 	resp, err := a.client.Heartbeat(ctx, models.HeartbeatRequest{
@@ -263,6 +286,7 @@ func (a *Agent) pollOnce(ctx context.Context) error {
 		AVProduct:      av,
 		Session:        sess,
 		WindowsUpdate:  wu,
+		Inventory:      inv,
 		Fingerprint:    &fp,
 		Threats:        threats,
 	})
@@ -273,6 +297,9 @@ func (a *Agent) pollOnce(ctx context.Context) error {
 		// Only now: a heartbeat that never reached the server has not reported
 		// anything, and the block has to ride the next one.
 		a.wu.markSent(wuGen)
+	}
+	if inv != nil {
+		a.inventory.markSent(invGen)
 	}
 	if n := len(resp.Commands); n > 0 {
 		log.Printf("agent: heartbeat ok, %d command(s) to run", n)
@@ -369,6 +396,10 @@ func (a *Agent) execute(ctx context.Context, cmd models.Command) {
 	case "wu_install_full":
 		long = true
 		run = func(ctx context.Context) (string, error) { return a.runWUInstall(ctx, true) }
+	case "inventory_scan":
+		// Not long: a dozen WMI queries and two registry walks are seconds, not
+		// minutes, and a `running` nobody has time to read is noise.
+		run = a.runInventoryScan
 	case "wu_reset":
 		// Long not because it usually is — the nominal run takes seconds — but
 		// because the case worth watching is the one where a service refuses to

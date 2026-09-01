@@ -179,6 +179,48 @@ const kpis = computed<Kpi[]>(() => {
       color: 'grey',
       to: { name: 'machines', query: { status: 'inactive' } },
     },
+    // --- Inventory. Each of these is a list an administrator can open and do
+    // something about, which is the only reason a KPI earns a card.
+    {
+      // The most actionable figure the inventory produces, and it belongs beside
+      // the Windows Update card rather than in a section of its own: below
+      // roughly ten percent free, Windows stops being able to stage a cumulative
+      // update, so a poste crosses this line and then quietly stops patching.
+      label: 'Disque presque plein',
+      value: s.machines_low_disk,
+      icon: 'storage',
+      color: 'negative',
+      to: {
+        name: 'machines',
+        query: { disk_free_below: String(s.low_disk_free_percent) },
+      },
+      caption: `moins de ${s.low_disk_free_percent} % libres`,
+    },
+    {
+      label: 'Sans chiffrement',
+      value: s.machines_unencrypted,
+      icon: 'lock_open',
+      color: 'warning',
+      // No filter behind this one yet: the card counts an EXISTS over the volume
+      // rows, and a list filter would want its own index. The figure is what a
+      // RSSI asks for; the postes behind it are a follow-up.
+      to: { name: 'machines' },
+    },
+    {
+      label: 'À renouveler',
+      value: s.machines_aging,
+      icon: 'update_disabled',
+      color: 'grey',
+      to: { name: 'machines' },
+      caption: `BIOS de plus de ${s.hardware_aging_years} ans`,
+    },
+    {
+      label: 'Logiciels',
+      value: s.software_count,
+      icon: 'inventory_2',
+      color: 'primary',
+      to: { name: 'software' },
+    },
   ];
 });
 

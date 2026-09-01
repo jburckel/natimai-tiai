@@ -7,10 +7,13 @@ vi.mock('boot/axios', () => ({
 
 import { api } from 'boot/axios';
 import {
+  exportMachinesCsv,
   getDuplicates,
   getMachine,
   listAntivirusProducts,
   listMachines,
+  listManufacturers,
+  listModels,
   listOsVersions,
   mergeMachines,
   allowReenroll,
@@ -304,5 +307,64 @@ describe('wakeNotification', () => {
 
     expect(note.type).toBe('negative');
     expect(note.message).toMatch(/5 poste/);
+  });
+});
+
+describe('inventory fleet listings', () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+  });
+
+  it('lists the models present in the fleet', async () => {
+    const payload = [{ name: 'OptiPlex 7010', count: 42 }];
+    vi.mocked(api.get).mockResolvedValue({ data: payload });
+
+    const result = await listModels();
+
+    expect(api.get).toHaveBeenCalledWith('/machines/models');
+    expect(result).toEqual(payload);
+  });
+
+  it('lists the manufacturers present in the fleet', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [] });
+    await listManufacturers();
+    expect(api.get).toHaveBeenCalledWith('/machines/manufacturers');
+  });
+});
+
+describe('exportMachinesCsv', () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+  });
+
+  // The export carries the same facets as the list: an export that silently
+  // ignored half the filters the reader had set would be worse than none.
+  it('asks for a blob and forwards every filter', async () => {
+    const blob = new Blob(['x']);
+    vi.mocked(api.get).mockResolvedValue({ data: blob });
+
+    const result = await exportMachinesCsv({ hw_model: 'OptiPlex', disk_free_below: 10 });
+
+    expect(api.get).toHaveBeenCalledWith('/machines/export.csv', {
+      params: { hw_model: 'OptiPlex', disk_free_below: 10 },
+      responseType: 'blob',
+    });
+    expect(result).toBe(blob);
+  });
+});
+
+describe('listMachines inventory facets', () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+  });
+
+  it('passes the model, disk and software filters through', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: 50 } });
+
+    await listMachines({ hw_model: 'OptiPlex', disk_free_below: 10, software_id: 7 });
+
+    expect(api.get).toHaveBeenCalledWith('/machines', {
+      params: { hw_model: 'OptiPlex', disk_free_below: 10, software_id: 7 },
+    });
   });
 });

@@ -50,13 +50,24 @@
       <div v-if="lastRefreshedAt" class="text-caption text-grey col-auto">
         Actualisé à {{ lastRefreshLabel }}
       </div>
+      <q-btn
+        flat
+        dense
+        round
+        icon="download"
+        :loading="exporting"
+        class="col-auto"
+        @click="exportCsv"
+      >
+        <q-tooltip>Exporter le parc filtré en CSV</q-tooltip>
+      </q-btn>
       <q-btn flat round icon="refresh" :loading="loading" class="col-auto" @click="reload">
         <q-tooltip>{{ autoRefreshHint }}</q-tooltip>
       </q-btn>
     </div>
 
-    <!-- The five dropdowns, folded by default: each is reached for now and
-         then, and a bar wearing all of them at once buried the search. -->
+    <!-- The dropdowns, folded by default: each is reached for now and then, and
+         a bar wearing all of them at once buried the search. -->
     <q-slide-transition>
       <div v-show="filtersOpen" class="row items-center q-col-gutter-sm q-mb-sm">
         <q-select
@@ -112,6 +123,28 @@
           outlined
           class="col-auto"
           style="width: 200px"
+          @update:model-value="pushQuery"
+        />
+        <q-select
+          v-model="model"
+          :options="modelOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          class="col-auto"
+          style="width: 220px"
+          @update:model-value="pushQuery"
+        />
+        <q-select
+          v-model="diskFree"
+          :options="diskOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          class="col-auto"
+          style="width: 210px"
           @update:model-value="pushQuery"
         />
       </div>
@@ -225,6 +258,35 @@
           </q-tooltip>
         </q-td>
       </template>
+      <!-- A bar and not a figure: the reason to scan this column is to spot the
+           postes about to run out, and a bar is read without being parsed. The
+           percentage is what colours it — 40 Go left on a 4 To disk and on a
+           128 Go SSD are not the same news. -->
+      <template #body-cell-disk="props">
+        <q-td :props="props">
+          <template v-if="props.row.system_volume_total_mb">
+            <q-linear-progress
+              :value="usedRatio(props.row)"
+              :color="
+                diskColor(
+                  freePercent(props.row.system_volume_total_mb, props.row.system_volume_free_mb),
+                )
+              "
+              size="8px"
+              rounded
+              style="width: 90px"
+            />
+            <div class="text-caption text-grey">
+              {{ sizeLabel(props.row.system_volume_free_mb) }} libres
+            </div>
+            <q-tooltip>
+              {{ sizeLabel(props.row.system_volume_free_mb) }} libres sur
+              {{ sizeLabel(props.row.system_volume_total_mb) }}
+            </q-tooltip>
+          </template>
+          <span v-else class="text-grey">—</span>
+        </q-td>
+      </template>
       <template #body-cell-session="props">
         <q-td :props="props">
           <q-badge :color="sessionColor(props.row.session_user_present)">
@@ -246,8 +308,10 @@ import { useRoute, useRouter } from 'vue-router';
 import { useQuasar, type QTableColumn } from 'quasar';
 import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from 'src/composables/useAutoRefresh';
 import {
+  exportMachinesCsv,
   listAntivirusProducts,
   listMachines,
+  listModels,
   listOsVersions,
   wakeMachines,
   wakeNotification,
@@ -277,12 +341,16 @@ import {
 import {
   antivirusLabel,
   antivirusStatusLabel,
+  diskColor,
+  downloadBlob,
   formatDateTime,
+  freePercent,
   onlineColor,
   onlineIcon,
   onlineLabel,
   protectionColor,
   protectionLabel,
+  sizeLabel,
   sessionColor,
   sessionLabel,
   timeAgoLabel,
@@ -308,6 +376,16 @@ const wu = ref<WindowsUpdateFilter | null>(null);
 const scan = ref<string | null>(null);
 const threatsOnly = ref(false);
 const onlineOnly = ref(false);
+// Inventory facets. `model` is a substring like the antivirus one — "OptiPlex"
+// has to gather the 7010 and the 7020, which is how a parc is reasoned about.
+const model = ref<string | null>(null);
+// A *percentage* of free space and not a size: 40 Go left on a 4 To disk and on
+// a 128 Go SSD are not the same news.
+const diskFree = ref<number | null>(null);
+// Set by a link from the software catalogue or from a fiche; never by a widget
+// here, since nobody types a catalogue id. Carried through the URL so the back
+// arrow from a fiche comes back to the same filtered list.
+const softwareId = ref<number | null>(null);
 
 // UI state, not query state: the panel starts folded even when a filter is
 // active — the chips under the bar say what is filtering instead.
@@ -321,6 +399,8 @@ const SORT_FIELD_BY_COLUMN: Record<string, MachineSortField> = {
   antivirus: 'av_product_name',
   windows_update: 'wu_pending_count',
   session: 'session_user_present',
+  model: 'hw_model',
+  disk: 'disk_free_percent',
   last_seen: 'last_seen',
 };
 const COLUMN_BY_SORT_FIELD = Object.fromEntries(
@@ -380,7 +460,17 @@ const osOptions = ref<{ label: string; value: string | null }[]>([
   { label: 'Tous les OS', value: null },
 ]);
 
-type FilterKey = 'antivirus' | 'status' | 'wu' | 'scan' | 'os';
+const modelOptions = ref<{ label: string; value: string | null }[]>([
+  { label: 'Tous les modèles', value: null },
+]);
+
+const diskOptions = [
+  { label: 'Espace disque : tous', value: null },
+  { label: 'Moins de 10 % libres', value: 10 },
+  { label: 'Moins de 20 % libres', value: 20 },
+];
+
+type FilterKey = 'antivirus' | 'status' | 'wu' | 'scan' | 'os' | 'model' | 'disk' | 'software';
 
 /** The folded filters currently narrowing the list, as chip labels. The label
  * is looked up in the dropdown's own options, so a chip always reads exactly
@@ -395,11 +485,23 @@ const filterChips = computed<{ key: FilterKey; label: string }[]>(() => {
   if (wu.value) chips.push({ key: 'wu', label: label(wuOptions, wu.value) });
   if (scan.value) chips.push({ key: 'scan', label: label(scanOptions, scan.value) });
   if (os.value) chips.push({ key: 'os', label: label(osOptions.value, os.value) });
+  if (model.value) chips.push({ key: 'model', label: label(modelOptions.value, model.value) });
+  if (diskFree.value != null) {
+    chips.push({
+      key: 'disk',
+      label: diskOptions.find((o) => o.value === diskFree.value)?.label ?? 'Espace disque',
+    });
+  }
+  // No option list behind this one: it comes from a link, so the chip is what
+  // tells the reader why the list is short — and the only way back out of it.
+  if (softwareId.value != null) {
+    chips.push({ key: 'software', label: 'Postes portant un logiciel' });
+  }
   return chips;
 });
 
 function clearFilter(key: FilterKey) {
-  const refs = { antivirus, status, wu, scan, os };
+  const refs = { antivirus, status, wu, scan, os, model, disk: diskFree, software: softwareId };
   refs[key].value = null;
   pushQuery();
 }
@@ -453,6 +555,19 @@ const columns: QTableColumn<Machine>[] = [
     align: 'center',
     sortable: true,
   },
+  // The two inventory columns the list is scanned for. The rest of the twenty-five
+  // is one machine's business and stays on the fiche.
+  { name: 'model', label: 'Modèle', field: 'hw_model', align: 'left', sortable: true },
+  // Sortable, and the sort is the point: "montre-moi les postes qui n'ont plus
+  // de place" is the question this column exists for. The bar carries the
+  // percentage, because that is the figure that means something.
+  {
+    name: 'disk',
+    label: 'Disque',
+    field: 'system_volume_free_mb',
+    align: 'left',
+    sortable: true,
+  },
   { name: 'last_seen', label: 'Vu le', field: 'last_seen', align: 'left', sortable: true },
 ];
 
@@ -504,6 +619,11 @@ function applyQuery() {
       : null;
   threatsOnly.value = queryValue(q.with_active_threats) === 'true';
   onlineOnly.value = queryValue(q.online) === 'true';
+  model.value = queryValue(q.hw_model);
+  const below = Number(queryValue(q.disk_free_below));
+  diskFree.value = diskOptions.some((o) => o.value === below) ? below : null;
+  const software = Number(queryValue(q.software_id));
+  softwareId.value = Number.isInteger(software) && software > 0 ? software : null;
 
   const sortField = queryValue(q.sort_by);
   const sortColumn = sortField ? COLUMN_BY_SORT_FIELD[sortField] : undefined;
@@ -537,6 +657,9 @@ function buildQuery(): Record<string, string> {
   }
   if (threatsOnly.value) query.with_active_threats = 'true';
   if (onlineOnly.value) query.online = 'true';
+  if (model.value) query.hw_model = model.value;
+  if (diskFree.value != null) query.disk_free_below = String(diskFree.value);
+  if (softwareId.value != null) query.software_id = String(softwareId.value);
   const p = pagination.value;
   const field = p.sortBy ? SORT_FIELD_BY_COLUMN[p.sortBy] : undefined;
   if (field && !(field === 'last_seen' && p.descending)) {
@@ -605,6 +728,9 @@ async function fetchMachines() {
   }
   if (threatsOnly.value) params.with_active_threats = true;
   if (onlineOnly.value) params.online = true;
+  if (model.value) params.hw_model = model.value;
+  if (diskFree.value != null) params.disk_free_below = diskFree.value;
+  if (softwareId.value != null) params.software_id = softwareId.value;
   const field = p.sortBy ? SORT_FIELD_BY_COLUMN[p.sortBy] : undefined;
   if (field) {
     params.sort_by = field;
@@ -684,6 +810,22 @@ async function loadOsOptions() {
   }
 }
 
+/** Models present in the fleet, on the same reasoning as the antivirus and OS
+ * dropdowns: what a parc contains is data, and the counts double as an
+ * inventory the renewal plan is read off. */
+async function loadModels() {
+  try {
+    const models = await listModels();
+    modelOptions.value = [
+      { label: 'Tous les modèles', value: null },
+      ...models.map((m) => ({ label: `${m.name} (${m.count})`, value: m.name })),
+    ];
+  } catch {
+    // Same as above: a dropdown that could not be filled must not take the list
+    // down with it — the filter is still typeable in the URL.
+  }
+}
+
 function runBulk(action: CommandAction) {
   const ids = selected.value.map((m) => m.id);
   if (!ids.length) return;
@@ -731,10 +873,57 @@ async function wakeBulk(ids: string[]) {
   }
 }
 
+/** The bar fills with what is *used*: a full disk is a full bar. */
+function usedRatio(m: Machine): number {
+  const total = m.system_volume_total_mb;
+  const free = m.system_volume_free_mb;
+  if (!total || free == null) return 0;
+  return Math.min(1, Math.max(0, (total - free) / total));
+}
+
+const exporting = ref(false);
+
+/** The filtered fleet as a spreadsheet — the same facets, no pagination. */
+async function exportCsv() {
+  exporting.value = true;
+  try {
+    const blob = await exportMachinesCsv(exportParams());
+    downloadBlob(blob, 'parc.csv');
+  } catch (e) {
+    $q.notify({ type: 'negative', message: apiErrorMessage(e, "Échec de l'export") });
+  } finally {
+    exporting.value = false;
+  }
+}
+
+/** The current filters, minus the pagination: an export of the first fifty rows
+ * is not an export. */
+function exportParams(): ListMachinesParams {
+  const params: ListMachinesParams = {};
+  if (search.value) params.search = search.value;
+  if (domain.value) params.domain = domain.value;
+  if (antivirus.value) params.antivirus = antivirus.value;
+  if (os.value) params.os_version = os.value;
+  if (status.value) params.status = status.value;
+  if (wu.value) params.wu_status = wu.value;
+  if (scan.value) {
+    const [scanType, scanDays] = scan.value.split(':');
+    params.scan_type = scanType as ScanFilter;
+    params.scan_older_than_days = Number(scanDays);
+  }
+  if (threatsOnly.value) params.with_active_threats = true;
+  if (onlineOnly.value) params.online = true;
+  if (model.value) params.hw_model = model.value;
+  if (diskFree.value != null) params.disk_free_below = diskFree.value;
+  if (softwareId.value != null) params.software_id = softwareId.value;
+  return params;
+}
+
 onMounted(() => {
   applyQuery();
   void reload();
   void loadAntivirusOptions();
   void loadOsOptions();
+  void loadModels();
 });
 </script>

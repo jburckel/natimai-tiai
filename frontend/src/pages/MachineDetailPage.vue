@@ -158,9 +158,14 @@
       <MachineDefenderCard :machine="machine" />
       <MachineWindowsUpdateCard :machine="machine" />
       <MachineAntivirusCard :machine="machine" />
+      <MachineHardwareCard :machine="machine" />
+      <MachineStorageCard :machine="machine" />
+      <MachineNetworkCard :machine="machine" />
     </div>
 
     <MachinePendingUpdatesCard v-if="machine" :machine="machine" :loading="loading" />
+
+    <MachineSoftwareCard v-if="machine" :machine="machine" :loading="loading" />
 
     <MachineThreatsCard
       v-model:pagination="threatPagination"
@@ -198,9 +203,13 @@ import CommandOutputDialog from 'src/components/machine/CommandOutputDialog.vue'
 import MachineAntivirusCard from 'src/components/machine/MachineAntivirusCard.vue';
 import MachineCommandsCard from 'src/components/machine/MachineCommandsCard.vue';
 import MachineDefenderCard from 'src/components/machine/MachineDefenderCard.vue';
+import MachineHardwareCard from 'src/components/machine/MachineHardwareCard.vue';
 import MachineIdentityCard from 'src/components/machine/MachineIdentityCard.vue';
 import MachineMergeDialog from 'src/components/machine/MachineMergeDialog.vue';
+import MachineNetworkCard from 'src/components/machine/MachineNetworkCard.vue';
 import MachinePendingUpdatesCard from 'src/components/machine/MachinePendingUpdatesCard.vue';
+import MachineSoftwareCard from 'src/components/machine/MachineSoftwareCard.vue';
+import MachineStorageCard from 'src/components/machine/MachineStorageCard.vue';
 import MachineThreatsCard from 'src/components/machine/MachineThreatsCard.vue';
 import MachineWindowsUpdateCard from 'src/components/machine/MachineWindowsUpdateCard.vue';
 import { DEFAULT_PAGE_SIZE, type TablePagination } from 'src/components/machine/types';

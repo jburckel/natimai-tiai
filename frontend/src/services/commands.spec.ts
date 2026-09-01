@@ -47,6 +47,7 @@ describe('command catalogue', () => {
     'wu_install',
     'wu_install_full',
     'wu_reset',
+    'inventory_scan',
     'reboot',
     'shutdown',
     'wake_on_lan',

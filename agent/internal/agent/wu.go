@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	"tiai/agent/internal/collector"
@@ -18,61 +17,10 @@ import (
 // today still appears in the console with its updates the same morning.
 const wuFirstCollectDelay = 2 * time.Minute
 
-// wuCache holds the last Windows Update reading between the slow cycle that
-// produces it and the heartbeat that ships it.
-//
-// The block is attached to a heartbeat only when it holds something the server
-// has not acknowledged yet: a WU state is a few dozen updates with their titles,
-// and re-sending an unchanged one every 60 seconds would multiply the parc's
-// heartbeat payload for no new information — while re-writing the same rows
-// server-side on every poll.
-//
-// "Acknowledged" is tracked with a generation counter rather than a boolean,
-// and that is the whole point of the type. A collection finishing *between* the
-// moment a heartbeat picks up its payload and the moment that heartbeat
-// succeeds must not be marked as sent: with a flag it would be, and the fresh
-// reading would then sit in the cache until the next cycle six hours later.
-type wuCache struct {
-	mu    sync.Mutex
-	state *models.WUState
-	// gen increments on every store; sentGen is the last generation the server
-	// acknowledged. Equal means there is nothing new to send.
-	gen     uint64
-	sentGen uint64
-}
-
-// store records a fresh reading, making it pending again.
-func (c *wuCache) store(state *models.WUState) {
-	if state == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.state = state
-	c.gen++
-}
-
-// pending returns the state to attach to the next heartbeat and the generation
-// to acknowledge afterwards, or (nil, 0) when the server is already up to date.
-func (c *wuCache) pending() (*models.WUState, uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.state == nil || c.gen == c.sentGen {
-		return nil, 0
-	}
-	return c.state, c.gen
-}
-
-// markSent acknowledges a generation after a successful heartbeat. A newer
-// reading stored in the meantime keeps the cache pending, which is exactly the
-// race the counter exists for.
-func (c *wuCache) markSent(gen uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if gen > c.sentGen {
-		c.sentGen = gen
-	}
-}
+// wuCache is the Windows Update slow-cycle cache. The mechanism — and the
+// generation counter that makes it correct — lives in cache.go, shared with the
+// inventory cycle.
+type wuCache = stateCache[models.WUState]
 
 // wuLoop collects the Windows Update state on its own slow cycle.
 //

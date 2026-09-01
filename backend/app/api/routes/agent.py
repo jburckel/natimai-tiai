@@ -23,6 +23,8 @@ from app.features.command.models import (
     Command,
     CommandStatus,
 )
+from app.features.inventory.crud import apply_inventory
+from app.features.inventory.schemas import InventoryReport
 from app.features.machine import fingerprint
 from app.features.machine.models import Machine
 from app.features.machine.status import compute_is_up_to_date
@@ -149,6 +151,11 @@ class HeartbeatRequest(BaseModel):
     # minutes. Absent on every other heartbeat, which leaves the stored state
     # alone exactly like an absent Defender block.
     windows_update: WUStateReport | None = None
+    # Rarer still than the block above: the agent collects this once a day and
+    # attaches it only when its own hash of the result changed, so a stable
+    # poste sends it once and then never again. Absent leaves everything stored
+    # alone, exactly like an absent Defender block.
+    inventory: InventoryReport | None = None
     fingerprint: Fingerprint | None = None
     threats: list[ThreatReport] = []
 
@@ -457,6 +464,21 @@ async def heartbeat(
         machine.wu_pending_count = await replace_pending(
             session, machine.id, wu.pending
         )
+
+    if payload.inventory is not None:
+        inv = payload.inventory
+        # Short-circuit on an unchanged hash: an agent that restarted has
+        # forgotten sending this and re-sends it, and there is nothing to do but
+        # note that the picture is still current. Skipping saves seven set
+        # replacements — a few hundred upserts on a well-stocked poste — for a
+        # machine already described correctly.
+        #
+        # Guarded on a non-empty hash: an agent that reports none has no claim
+        # to make, and "" == "" would silently skip every inventory it sends.
+        if inv.hash and inv.hash == machine.inventory_hash:
+            machine.inventory_last_seen = utcnow()
+        else:
+            await apply_inventory(session, machine, inv)
 
     if payload.fingerprint is not None:
         fp = payload.fingerprint

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import Index
 from sqlmodel import Field, SQLModel
@@ -113,6 +113,65 @@ class Machine(SQLModel, table=True):
     wu_reboot_required: bool = Field(default=False)
     wu_last_search: datetime | None = utc_field(default=None, nullable=True)
     wu_last_install: datetime | None = utc_field(default=None, nullable=True)
+
+    # --- Inventory (dev/plan-inventaire.md), refreshed on the agent's own daily
+    # cycle and only when something actually changed. Everything here has
+    # cardinality one: the sticks, disks, volumes, adapters, GPUs and programs
+    # live in the inventory_* tables. NULL = never reported, throughout.
+    hw_manufacturer: str | None = None
+    hw_model: str | None = None
+    hw_serial: str | None = None  # chassis serial, the sticker an asset tag copies
+    hw_chassis_type: str | None = None  # desktop / laptop / mini / virtual…
+    # NOT NULL: a machine that never reported is not a virtual one, and false is
+    # the honest default. Load-bearing beyond display — a VM has no battery, no
+    # SMART and no BIOS to flash, so half the hardware alerts have to skip it.
+    hw_is_virtual: bool = Field(default=False)
+    hw_hypervisor: str | None = None
+    mb_manufacturer: str | None = None
+    mb_model: str | None = None
+    mb_serial: str | None = None
+    bios_vendor: str | None = None
+    bios_version: str | None = None
+    # A date and not a timestamp: firmware is dated to the day, and a midnight-UTC
+    # instant would shift across the date line for no reason. It is also the
+    # closest thing to the machine's age, which is what a renewal plan reads.
+    bios_date: date | None = None
+    secure_boot: bool | None = None
+    tpm_version: str | None = None
+    # One CPU, in columns rather than in a table as GLPI has it: a workstation is
+    # single-socket, and the rare dual-socket one carries two identical
+    # processors by construction. cpu_count says how many.
+    cpu_model: str | None = None
+    cpu_manufacturer: str | None = None
+    cpu_cores: int | None = None
+    cpu_threads: int | None = None
+    cpu_speed_mhz: int | None = None
+    cpu_count: int | None = None
+    # Totals, so the machine list can show memory without joining to the sticks.
+    ram_total_mb: int | None = None
+    ram_slots_total: int | None = None
+    ram_slots_used: int | None = None
+    os_architecture: str | None = None
+    os_install_date: datetime | None = utc_field(default=None, nullable=True)
+    last_boot_time: datetime | None = utc_field(default=None, nullable=True)
+    # The system volume's size and free space, derived server-side from the
+    # reported volumes rather than sent as fields of their own — the same
+    # reasoning as wu_pending_count. They are here, denormalised out of
+    # inventory_volumes, because "quels postes n'ont plus de place" is a
+    # fleet-wide question: a column sorts, filters and counts, where a
+    # correlated subquery over a child table would do none of the three cheaply.
+    # It is also the disk figure that matters — a full C: is the first cause of
+    # a poste that stops taking Windows updates.
+    system_volume_total_mb: int | None = None
+    system_volume_free_mb: int | None = None
+    # The agent's own hash of the inventory it last sent. Compared before writing:
+    # an agent that restarted re-sends an inventory the server already holds, and
+    # matching this lets the whole set replacement be skipped.
+    inventory_hash: str | None = None
+    # When that inventory was taken — deliberately *not* last_seen. A poste seen
+    # a minute ago whose inventory is three weeks old is an anomaly to show, not
+    # to hide behind a fresh heartbeat.
+    inventory_last_seen: datetime | None = utc_field(default=None, nullable=True)
 
     # Interactive session (WTS), refreshed on each heartbeat. NULL means "never
     # reported" — an agent older than the feature, or a failed read — which is

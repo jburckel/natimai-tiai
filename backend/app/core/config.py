@@ -175,6 +175,18 @@ class Settings(BaseSettings):
     # Raise it in step with `heartbeat_interval_seconds` on a slower parc.
     OFFLINE_AFTER_SECONDS: int = 180
 
+    # --- Inventory thresholds ---
+    # Below this much free space on the system volume, a poste is counted on the
+    # dashboard and can be filtered for. Ten percent because that is roughly
+    # where Windows Update starts failing to stage a cumulative update — the
+    # symptom being a poste that quietly stops patching, which is the other
+    # module's problem and this one's early warning.
+    LOW_DISK_FREE_PERCENT: int = 10
+    # Past this age — read off the BIOS date, the only age a poste knows about
+    # itself — a machine is counted as due for renewal. Five years is a default,
+    # not a policy: parcs amortise on their own schedule, hence a setting.
+    HARDWARE_AGING_YEARS: int = 5
+
     # --- Wake-on-LAN ---
     # The magic packet is emitted by the server, not by an agent: the machine it
     # targets is off, and the whole point is to reach it anyway. What it needs is

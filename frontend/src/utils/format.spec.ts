@@ -1,33 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EMAIL_PREFERENCE_OPTIONS,
   antivirusColor,
   antivirusLabel,
   antivirusStatusLabel,
   boolLabel,
+  chassisLabel,
+  cpuLabel,
+  diskColor,
+  emailPreferenceLabel,
+  encryptionColor,
+  encryptionLabel,
+  formatDate,
   formatDateTime,
+  freePercent,
   ipAddressLabel,
+  linkSpeedLabel,
+  mediaTypeLabel,
+  nicTypeLabel,
   onlineColor,
   onlineIcon,
   onlineLabel,
   protectionColor,
   protectionLabel,
+  ramLabel,
   runningModeLabel,
   sessionColor,
   sessionLabel,
   sessionTypeLabel,
-  timeAgoLabel,
+  sizeLabel,
   threatSeverityColor,
   threatSeverityLabel,
   threatStatusColor,
   threatStatusLabel,
+  timeAgoLabel,
   wuPendingColor,
   wuPendingLabel,
   wuSeverityColor,
   wuSeverityLabel,
   wuSizeLabel,
   wuTypeLabel,
-  EMAIL_PREFERENCE_OPTIONS,
-  emailPreferenceLabel,
 } from './format';
 
 describe('formatDateTime', () => {
@@ -415,5 +427,100 @@ describe('email preference labels', () => {
     expect(emailPreferenceLabel('hourly')).toBe('—');
     expect(emailPreferenceLabel(null)).toBe('—');
     expect(emailPreferenceLabel(undefined)).toBe('—');
+  });
+});
+
+describe('inventory formatting', () => {
+  // Binary units throughout, because that is what the source reports and what
+  // every other screen the reader has open will show.
+  it('renders sizes in the unit a human would use', () => {
+    expect(sizeLabel(512)).toBe('512 Mio');
+    expect(sizeLabel(2048)).toBe('2.0 Gio');
+    // One decimal below ten, none above: "487,3 Gio" helps nobody.
+    expect(sizeLabel(486000)).toBe('475 Gio');
+    expect(sizeLabel(4 * 1024 * 1024)).toBe('4.0 Tio');
+    expect(sizeLabel(null)).toBe('—');
+  });
+
+  it('computes free space as a whole percentage', () => {
+    expect(freePercent(100000, 41000)).toBe(41);
+    // Nothing to divide: a machine that never reported an inventory is not a
+    // full disk.
+    expect(freePercent(null, 100)).toBeNull();
+    expect(freePercent(0, 0)).toBeNull();
+    expect(freePercent(100, null)).toBeNull();
+  });
+
+  // The lower threshold is not decorative: below roughly ten percent Windows
+  // Update stops being able to stage a cumulative update, so a poste crosses it
+  // and then quietly stops patching.
+  it('colours the occupancy bar on the thresholds that matter', () => {
+    expect(diskColor(4)).toBe('negative');
+    expect(diskColor(15)).toBe('orange');
+    expect(diskColor(60)).toBe('positive');
+    expect(diskColor(null)).toBe('grey-5');
+  });
+
+  it('names a media type, unknown included', () => {
+    expect(mediaTypeLabel('SSD')).toBe('SSD');
+    expect(mediaTypeLabel('HDD')).toBe('Disque dur');
+    // A real answer and not a missing one: the WMI class that always responds
+    // cannot tell the two apart.
+    expect(mediaTypeLabel('unknown')).toBe('Type inconnu');
+    expect(mediaTypeLabel(null)).toBe('—');
+  });
+
+  // Not read is deliberately not "not encrypted": an alarm on a machine that may
+  // well be encrypted is how a dashboard gets ignored.
+  it('distinguishes an unread encryption status from an absent one', () => {
+    expect(encryptionLabel('FullyEncrypted')).toBe('Chiffré');
+    expect(encryptionLabel('FullyDecrypted')).toBe('Non chiffré');
+    expect(encryptionLabel(null)).toBe('Non relevé');
+    expect(encryptionColor(null)).toBe('grey-6');
+    expect(encryptionColor('FullyEncrypted')).toBe('positive');
+    expect(encryptionColor('FullyDecrypted')).toBe('negative');
+  });
+
+  it('quotes a link speed in the unit it is sold in', () => {
+    expect(linkSpeedLabel(1000)).toBe('1 Gb/s');
+    expect(linkSpeedLabel(2500)).toBe('2.5 Gb/s');
+    expect(linkSpeedLabel(100)).toBe('100 Mb/s');
+    expect(linkSpeedLabel(null)).toBe('—');
+  });
+
+  it('reads a CPU as one fact rather than three', () => {
+    expect(cpuLabel('Intel i7-13700', 16, 24, 1)).toBe('Intel i7-13700 (16 cœurs, 24 threads)');
+    expect(cpuLabel('Xeon Gold', 32, 64, 2)).toBe(
+      'Xeon Gold (2 processeurs, 32 cœurs, 64 threads)',
+    );
+    expect(cpuLabel('Unknown CPU', null, null, null)).toBe('Unknown CPU');
+    expect(cpuLabel(null, 8, 16, 1)).toBe('—');
+  });
+
+  it('reads RAM as the sentence an upgrade decision needs', () => {
+    expect(ramLabel(32768, 2, 4)).toBe('32 Gio (2 barrette(s) sur 4)');
+    // Slots unknown: the size alone, rather than an invented "sur 0".
+    expect(ramLabel(32768, null, null)).toBe('32 Gio');
+    expect(ramLabel(null, 2, 4)).toBe('—');
+  });
+
+  it('renders a date without inventing a time', () => {
+    expect(formatDate('2024-01-15')).toBe('15/01/2024');
+    expect(formatDate(null)).toBe('—');
+    expect(formatDate('not a date')).toBe('—');
+  });
+
+  it('names a chassis in words', () => {
+    expect(chassisLabel('laptop')).toBe('Portable');
+    // An unfolded code is passed through: a question someone can answer beats
+    // an empty cell.
+    expect(chassisLabel('chassis-25')).toBe('chassis-25');
+    expect(chassisLabel(null)).toBe('—');
+  });
+
+  it('names an adapter medium', () => {
+    expect(nicTypeLabel('wifi')).toBe('Wi-Fi');
+    expect(nicTypeLabel('ethernet')).toBe('Ethernet');
+    expect(nicTypeLabel(null)).toBe('—');
   });
 });

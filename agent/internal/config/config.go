@@ -32,6 +32,13 @@ const (
 	// fresh reading with a wu_scan.
 	DefaultWUCollectInterval = 21600 // seconds
 
+	// DefaultInventoryCollectInterval is the hardware/software cycle: a day.
+	// Slower than Windows Update's six hours because what it reads changes far
+	// less — a disk is not swapped between two mornings — and because the block
+	// is the largest the agent sends. It costs nothing on the quiet days: the
+	// collection runs, the hash matches, and nothing is transmitted at all.
+	DefaultInventoryCollectInterval = 86400 // seconds
+
 	// DefaultWUInstallTimeout is two hours. A cumulative update on a slow link
 	// is the case that sets it: download and install both happen inside this
 	// budget, and blowing it leaves the command reported as timed out while
@@ -57,7 +64,12 @@ type Config struct {
 	// WUInstallTimeoutSeconds. Both are here rather than hard-coded because they
 	// are the two values a slow parc or a slow link actually needs to change.
 	WUCollectIntervalSeconds int `yaml:"wu_collect_interval_seconds"`
-	WUInstallTimeoutSeconds  int `yaml:"wu_install_timeout_seconds"`
+	// The hardware/software inventory cycle. Its own key rather than sharing
+	// the Windows Update one: the two answer different questions at different
+	// rates, and a parc that wants its patch state hourly does not want its
+	// motherboard model re-read hourly with it.
+	InventoryCollectIntervalSeconds int `yaml:"inventory_collect_interval_seconds"`
+	WUInstallTimeoutSeconds         int `yaml:"wu_install_timeout_seconds"`
 
 	// ReportSessionUsername controls whether the *name* of the logged-on user is
 	// sent to the server; the presence always is. Personal data, so it is
@@ -69,6 +81,18 @@ type Config struct {
 	// skips it and then calls Save.
 	ReportSessionUsername *bool `yaml:"report_session_username"`
 
+	// Whether the inventory carries the list of installed programs. A pointer for
+	// the same reason as the flag above, and switchable by GPO for the same kind
+	// of reason: crossing "what is installed" with "who is logged on" is how a
+	// fleet inventory turns into something about a named person
+	// (dev/plan-inventaire.md §7).
+	//
+	// Switched off, the registry is never read and the block carries an *empty*
+	// list rather than omitting it — which is what makes the guarantee real: the
+	// next cycle erases whatever an earlier one stored, instead of leaving it
+	// sitting in the database. The hardware inventory is unaffected.
+	ReportSoftware *bool `yaml:"report_software"`
+
 	// AuthToken is never serialized to YAML — it is stored encrypted (DPAPI) in
 	// token.dat and loaded into this field at runtime.
 	AuthToken string `yaml:"-"`
@@ -77,13 +101,14 @@ type Config struct {
 // DefaultConfig returns sane defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		HeartbeatIntervalSeconds: DefaultHeartbeatInterval,
-		RequestTimeoutSeconds:    DefaultRequestTimeout,
-		BackoffMaxSeconds:        DefaultBackoffMax,
-		QueueMaxItems:            DefaultQueueMaxItems,
-		WUCollectIntervalSeconds: DefaultWUCollectInterval,
-		WUInstallTimeoutSeconds:  DefaultWUInstallTimeout,
-		LogLevel:                 "INFO",
+		HeartbeatIntervalSeconds:        DefaultHeartbeatInterval,
+		RequestTimeoutSeconds:           DefaultRequestTimeout,
+		BackoffMaxSeconds:               DefaultBackoffMax,
+		QueueMaxItems:                   DefaultQueueMaxItems,
+		WUCollectIntervalSeconds:        DefaultWUCollectInterval,
+		InventoryCollectIntervalSeconds: DefaultInventoryCollectInterval,
+		WUInstallTimeoutSeconds:         DefaultWUInstallTimeout,
+		LogLevel:                        "INFO",
 	}
 }
 
@@ -105,6 +130,9 @@ func (c *Config) applyDefaults() {
 	if c.WUCollectIntervalSeconds <= 0 {
 		c.WUCollectIntervalSeconds = DefaultWUCollectInterval
 	}
+	if c.InventoryCollectIntervalSeconds <= 0 {
+		c.InventoryCollectIntervalSeconds = DefaultInventoryCollectInterval
+	}
 	if c.WUInstallTimeoutSeconds <= 0 {
 		c.WUInstallTimeoutSeconds = DefaultWUInstallTimeout
 	}
@@ -119,6 +147,12 @@ func (c *Config) applyDefaults() {
 
 // ReportsUsername reports whether the logged-on user's name may be sent, so
 // callers never have to dereference the pointer themselves.
+// ReportsSoftware reports whether the installed-program list is collected.
+// Absent from the YAML means yes, like ReportsUsername.
+func (c *Config) ReportsSoftware() bool {
+	return c.ReportSoftware == nil || *c.ReportSoftware
+}
+
 func (c *Config) ReportsUsername() bool {
 	return c.ReportSessionUsername == nil || *c.ReportSessionUsername
 }
