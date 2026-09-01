@@ -140,3 +140,76 @@ func collectAddresses(head *windows.IpAdapterAddresses) []rawAddress {
 	}
 	return out
 }
+
+// ipAdapterDHCPEnabled is IP_ADAPTER_DHCP_ENABLED from iptypes.h. Not exported
+// by x/sys/windows, and one bit is not worth a dependency.
+const ipAdapterDHCPEnabled = 0x0004
+
+// enumerateAdapters lists every adapter for the inventory — including the ones
+// that are down, which is precisely what makes it a different walk from
+// collectAddresses above rather than a widening of it.
+//
+// The same buffer dance, deliberately repeated rather than factored out with
+// collectAddresses behind a flag: the two differ in what they keep and in what
+// they read off each adapter, and a shared walk parameterised by a boolean is
+// how the address election — validated on a real machine, with five APIPA
+// addresses and two Hyper-V switches to get wrong — would quietly change one day.
+func enumerateAdapters() ([]rawAdapter, error) {
+	size := uint32(initialAdapterBufSize)
+	for range adapterBufAttempts {
+		buf := make([]windows.IpAdapterAddresses,
+			size/uint32(unsafe.Sizeof(windows.IpAdapterAddresses{}))+1)
+		head := &buf[0]
+
+		err := windows.GetAdaptersAddresses(windows.AF_UNSPEC, gaaFlags, 0, head, &size)
+		switch {
+		case err == nil:
+			return collectAdapters(head), nil
+		case errors.Is(err, windows.ERROR_NO_DATA):
+			return nil, nil
+		case !errors.Is(err, windows.ERROR_BUFFER_OVERFLOW):
+			return nil, fmt.Errorf("GetAdaptersAddresses: %w", err)
+		}
+	}
+	return nil, fmt.Errorf(
+		"GetAdaptersAddresses: buffer still too small after %d attempts", adapterBufAttempts)
+}
+
+// collectAdapters walks the adapter list, keeping one entry per adapter.
+//
+// Loopback is dropped and nothing else is: a disconnected NIC and a Hyper-V
+// switch are both part of what this machine has, and hiding them would make the
+// inventory disagree with the Device Manager an administrator is looking at.
+func collectAdapters(head *windows.IpAdapterAddresses) []rawAdapter {
+	var out []rawAdapter
+	for ad := head; ad != nil; ad = ad.Next {
+		if ad.IfType == windows.IF_TYPE_SOFTWARE_LOOPBACK {
+			continue
+		}
+		a := rawAdapter{
+			Name:      windows.UTF16PtrToString(ad.Description),
+			IfType:    ad.IfType,
+			SpeedBits: ad.TransmitLinkSpeed,
+			Up:        ad.OperStatus == windows.IfOperStatusUp,
+			DHCP:      ad.Flags&ipAdapterDHCPEnabled != 0,
+		}
+		if n := ad.PhysicalAddressLength; n > 0 && int(n) <= len(ad.PhysicalAddress) {
+			a.MAC = append(net.HardwareAddr(nil), ad.PhysicalAddress[:n]...)
+		}
+		if gw := ad.FirstGatewayAddress; gw != nil {
+			if ip := gw.Address.IP(); ip != nil {
+				a.Gateway = ip.String()
+			}
+		}
+		for ua := ad.FirstUnicastAddress; ua != nil; ua = ua.Next {
+			ip := ua.Address.IP()
+			if ip == nil {
+				continue
+			}
+			a.Addresses = append(a.Addresses, ip)
+			a.PrefixLens = append(a.PrefixLens, ua.OnLinkPrefixLength)
+		}
+		out = append(out, a)
+	}
+	return out
+}

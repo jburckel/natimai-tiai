@@ -30,6 +30,10 @@
           <q-item-section avatar><q-icon name="devices" /></q-item-section>
           <q-item-section>Postes</q-item-section>
         </q-item>
+        <q-item v-ripple clickable :to="{ name: 'software' }">
+          <q-item-section avatar><q-icon name="inventory_2" /></q-item-section>
+          <q-item-section>Logiciels</q-item-section>
+        </q-item>
         <q-item v-if="auth.isAdmin" v-ripple clickable :to="{ name: 'users' }">
           <q-item-section avatar><q-icon name="group" /></q-item-section>
           <q-item-section>Utilisateurs</q-item-section>

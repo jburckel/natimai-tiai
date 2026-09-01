@@ -40,6 +40,15 @@ func applyRegistryOverrides(cfg *Config) {
 	if v, _, err := k.GetIntegerValue("WUCollectIntervalSeconds"); err == nil && v > 0 {
 		cfg.WUCollectIntervalSeconds = int(v)
 	}
+	if v, _, err := k.GetIntegerValue("InventoryCollectIntervalSeconds"); err == nil && v > 0 {
+		cfg.InventoryCollectIntervalSeconds = int(v)
+	}
+	// Presence wins, like ReportSessionUsername and for the same reason: 0 is
+	// the meaningful value here, and it is the one an administrator pushes.
+	if v, _, err := k.GetIntegerValue("ReportSoftware"); err == nil {
+		on := v != 0
+		cfg.ReportSoftware = &on
+	}
 	if v, _, err := k.GetIntegerValue("WUInstallTimeoutSeconds"); err == nil && v > 0 {
 		cfg.WUInstallTimeoutSeconds = int(v)
 	}

@@ -49,6 +49,15 @@ export interface Machine {
   wu_pending_count: number | null;
   /** Never null: a machine that has not reported is not awaiting a restart. */
   wu_reboot_required: boolean;
+  /**
+   * Three inventory fields in the list and not the twenty-five the fiche shows:
+   * this payload serves a thousand rows, and what a list is scanned for is
+   * "quel modèle" and "lequel n'a plus de place".
+   */
+  hw_model: string | null;
+  ram_total_mb: number | null;
+  system_volume_total_mb: number | null;
+  system_volume_free_mb: number | null;
   last_seen: string;
   /**
    * Powered on with its agent reaching the server, i.e. `last_seen` is younger
@@ -75,6 +84,95 @@ export interface PendingUpdate {
   /** When this machine first reported the update — how long it has been behind. */
   first_seen: string;
   last_seen: string;
+}
+
+/** One physical memory stick. */
+export interface MemoryModule {
+  id: number;
+  /** The bank/slot label ("DIMM A1") — the server's key for this row. */
+  slot: string;
+  capacity_mb: number | null;
+  type: string | null;
+  speed_mhz: number | null;
+  manufacturer: string | null;
+  serial: string | null;
+  form_factor: string | null;
+}
+
+/** One physical drive. */
+export interface Disk {
+  id: number;
+  device_id: string;
+  model: string | null;
+  serial: string | null;
+  firmware: string | null;
+  /**
+   * SSD / HDD / NVMe / unknown. 'unknown' is a real answer: the WMI class that
+   * always responds cannot tell the two apart, and a host without the Storage
+   * namespace falls back to it.
+   */
+  media_type: string | null;
+  bus_type: string | null;
+  size_mb: number | null;
+  health_status: string | null;
+  is_removable: boolean;
+}
+
+/** One fixed logical volume. No `used_mb`: it is `total - free`, and two figures
+ * that can contradict each other about one number is what deriving avoids. */
+export interface Volume {
+  id: number;
+  letter: string;
+  label: string | null;
+  filesystem: string | null;
+  total_mb: number | null;
+  free_mb: number | null;
+  is_system: boolean;
+  /** BitLocker. null = not read, which is *not* "not encrypted". */
+  encryption_status: string | null;
+}
+
+/** One network adapter. The elected address lives on the machine itself
+ * (`ip_address`, `mac_address`) and is re-read every heartbeat; this list is a
+ * day old. */
+export interface Nic {
+  id: number;
+  name: string | null;
+  mac: string | null;
+  type: string | null;
+  speed_mbps: number | null;
+  is_up: boolean;
+  is_virtual: boolean;
+  ip_address: string | null;
+  ip_prefix_length: number | null;
+  is_dhcp: boolean | null;
+  gateway: string | null;
+  driver_version: string | null;
+}
+
+/** One display adapter. Two is the common case: an iGPU and a card. */
+export interface Gpu {
+  id: number;
+  name: string;
+  chipset: string | null;
+  memory_mb: number | null;
+  driver_version: string | null;
+  driver_date: string | null;
+  resolution: string | null;
+}
+
+/** One program installed on a machine, with its catalogue identity. */
+export interface InstalledSoftware {
+  /** The parc-wide handle: what "qui d'autre a ce logiciel" is asked with. */
+  software_id: number;
+  name: string;
+  version: string;
+  publisher: string;
+  install_date: string | null;
+  arch: string | null;
+  source: string | null;
+  install_location: string | null;
+  first_seen: string;
 }
 
 export interface MachineDetail extends Machine {
@@ -116,6 +214,43 @@ export interface MachineDetail extends Machine {
   first_seen: string;
   created_at: string;
   updated_at: string;
+
+  // --- Inventory. Cardinality-one facts as fields, the rest as lists.
+  hw_manufacturer: string | null;
+  hw_serial: string | null;
+  hw_chassis_type: string | null;
+  hw_is_virtual: boolean;
+  hw_hypervisor: string | null;
+  mb_manufacturer: string | null;
+  mb_model: string | null;
+  mb_serial: string | null;
+  bios_vendor: string | null;
+  bios_version: string | null;
+  bios_date: string | null;
+  secure_boot: boolean | null;
+  tpm_version: string | null;
+  cpu_model: string | null;
+  cpu_manufacturer: string | null;
+  cpu_cores: number | null;
+  cpu_threads: number | null;
+  cpu_speed_mhz: number | null;
+  cpu_count: number | null;
+  ram_slots_total: number | null;
+  ram_slots_used: number | null;
+  os_architecture: string | null;
+  os_install_date: string | null;
+  last_boot_time: string | null;
+  /**
+   * When the inventory was taken — deliberately not `last_seen`. A poste seen a
+   * minute ago whose inventory is three weeks old is an anomaly to show.
+   */
+  inventory_last_seen: string | null;
+  memory_modules: MemoryModule[];
+  disks: Disk[];
+  volumes: Volume[];
+  nics: Nic[];
+  gpus: Gpu[];
+  software: InstalledSoftware[];
 }
 
 export interface MachineList {
@@ -132,7 +267,12 @@ export type MachineSortField =
   | 'av_product_name'
   | 'wu_pending_count'
   | 'session_user_present'
-  | 'last_seen';
+  | 'last_seen'
+  | 'hw_model'
+  | 'ram_total_mb'
+  /** Free space as a *percentage*: 40 Go left on a 4 To disk and on a 128 Go SSD
+   * are not the same news. Derived server-side from two columns. */
+  | 'disk_free_percent';
 
 export interface ListMachinesParams {
   /** Free search: hostname, UUID, IP, antivirus name — and MAC in any notation. */
@@ -152,6 +292,13 @@ export interface ListMachinesParams {
   scan_older_than_days?: number;
   /** true = only machines with at least one active threat. */
   with_active_threats?: boolean;
+  /** Hardware model, matched as a substring ("OptiPlex" gathers 7010 and 7020). */
+  hw_model?: string;
+  hw_manufacturer?: string;
+  /** Only machines whose system volume is below this percentage of free space. */
+  disk_free_below?: number;
+  /** Only machines carrying this catalogue entry — the software drill-down. */
+  software_id?: number;
   /** Server-side sort; omitted = freshest contact first. */
   sort_by?: MachineSortField;
   sort_desc?: boolean;
@@ -193,6 +340,41 @@ export interface OsVersion {
  */
 export async function listOsVersions(): Promise<OsVersion[]> {
   const { data } = await api.get<OsVersion[]>('/machines/os-versions');
+  return data;
+}
+
+/** One distinct inventory value present in the fleet, with its count. */
+export interface FleetValue {
+  name: string;
+  count: number;
+}
+
+/**
+ * Hardware models present in the fleet, most widespread first. Feeds the model
+ * filter, and the renewal plan is read off it top-down.
+ */
+export async function listModels(): Promise<FleetValue[]> {
+  const { data } = await api.get<FleetValue[]>('/machines/models');
+  return data;
+}
+
+/** Hardware manufacturers present in the fleet, most widespread first. */
+export async function listManufacturers(): Promise<FleetValue[]> {
+  const { data } = await api.get<FleetValue[]>('/machines/manufacturers');
+  return data;
+}
+
+/**
+ * The filtered fleet as a spreadsheet.
+ *
+ * Fetched as a blob and handed to the browser rather than linked to: the API
+ * needs the Authorization header, which a plain `<a href>` would not carry.
+ */
+export async function exportMachinesCsv(params: ListMachinesParams = {}): Promise<Blob> {
+  const { data } = await api.get<Blob>('/machines/export.csv', {
+    params,
+    responseType: 'blob',
+  });
   return data;
 }
 

@@ -1,21 +1,32 @@
 """Console-facing endpoints: list and inspect managed machines."""
 
 import uuid
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field, computed_field
 from sqlalchemy import case, exists, func, or_
 from sqlalchemy.sql.elements import ColumnElement, UnaryExpression
 from sqlmodel import col, select
 
+from app.api.csv_export import csv_response
 from app.api.deps import CurrentUser, SessionDep, require_permission
 from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
 from app.features.audit import crud as audit
 from app.features.base import utcnow
 from app.features.command.models import Command, CommandStatus, CommandType
+from app.features.inventory.models import (
+    Disk,
+    Gpu,
+    MachineSoftware,
+    MemoryModule,
+    Nic,
+    Software,
+    Volume,
+)
 from app.features.machine import crud as machine_crud
 from app.features.machine.fingerprint import trustworthy_smbios_uuid
 from app.features.machine.models import Machine
@@ -23,7 +34,9 @@ from app.features.machine.status import (
     MachineStatus,
     ScanFilter,
     WindowsUpdateFilter,
+    disk_free_percent,
     is_online,
+    low_disk_clause,
     online_clause,
     scan_clause,
     status_clause,
@@ -70,6 +83,14 @@ class MachineOut(BaseModel):
     # count = never reported (see the model).
     wu_pending_count: int | None
     wu_reboot_required: bool
+    # Three inventory fields in the list and not the twenty-five the fiche
+    # shows: this payload serves a thousand rows, and the questions a list
+    # answers are "quel modèle" and "lesquels n'ont plus de place". The rest is
+    # one machine's business and lives in the detail.
+    hw_model: str | None
+    ram_total_mb: int | None
+    system_volume_total_mb: int | None
+    system_volume_free_mb: int | None
     last_seen: datetime
 
     model_config = {"from_attributes": True}
@@ -100,6 +121,114 @@ class PendingUpdateOut(BaseModel):
     last_seen: datetime
 
     model_config = {"from_attributes": True}
+
+
+class MemoryModuleOut(BaseModel):
+    """One physical memory stick."""
+
+    id: int
+    slot: str
+    capacity_mb: int | None
+    type: str | None
+    speed_mhz: int | None
+    manufacturer: str | None
+    serial: str | None
+    form_factor: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class DiskOut(BaseModel):
+    """One physical drive."""
+
+    id: int
+    device_id: str
+    model: str | None
+    serial: str | None
+    firmware: str | None
+    media_type: str | None
+    bus_type: str | None
+    size_mb: int | None
+    health_status: str | None
+    is_removable: bool
+
+    model_config = {"from_attributes": True}
+
+
+class VolumeOut(BaseModel):
+    """One fixed logical volume.
+
+    ``used_mb`` is not here either: the console subtracts. Two figures that can
+    contradict each other about one number is what deriving avoids.
+    """
+
+    id: int
+    letter: str
+    label: str | None
+    filesystem: str | None
+    total_mb: int | None
+    free_mb: int | None
+    is_system: bool
+    encryption_status: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class NicOut(BaseModel):
+    """One network adapter.
+
+    The elected address is on the machine itself (``ip_address``,
+    ``mac_address``) and is *not* one of these rows: it is re-read every
+    heartbeat because it is the wake target, while this list is a day old.
+    """
+
+    id: int
+    name: str | None
+    mac: str | None
+    type: str | None
+    speed_mbps: int | None
+    is_up: bool
+    is_virtual: bool
+    ip_address: str | None
+    ip_prefix_length: int | None
+    is_dhcp: bool | None
+    gateway: str | None
+    driver_version: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class GpuOut(BaseModel):
+    """One display adapter."""
+
+    id: int
+    name: str
+    chipset: str | None
+    memory_mb: int | None
+    driver_version: str | None
+    driver_date: date | None
+    resolution: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class InstalledSoftwareOut(BaseModel):
+    """One program installed on this machine, catalogue identity included.
+
+    ``software_id`` rides along because it is the parc-wide handle: it is what
+    "qui d'autre a ce logiciel" is asked with, and what a deployed package will
+    hang on.
+    """
+
+    software_id: int
+    name: str
+    version: str
+    publisher: str
+    install_date: date | None
+    arch: str | None
+    source: str | None
+    install_location: str | None
+    first_seen: datetime
 
 
 class MachineDetailOut(MachineOut):
@@ -141,6 +270,44 @@ class MachineDetailOut(MachineOut):
     # a second round trip would only make the page load in two steps.
     pending_updates: list[PendingUpdateOut] = []
 
+    # --- Inventory. Cardinality-one facts as columns, the rest as lists.
+    hw_manufacturer: str | None
+    hw_serial: str | None
+    hw_chassis_type: str | None
+    hw_is_virtual: bool
+    hw_hypervisor: str | None
+    mb_manufacturer: str | None
+    mb_model: str | None
+    mb_serial: str | None
+    bios_vendor: str | None
+    bios_version: str | None
+    bios_date: date | None
+    secure_boot: bool | None
+    tpm_version: str | None
+    cpu_model: str | None
+    cpu_manufacturer: str | None
+    cpu_cores: int | None
+    cpu_threads: int | None
+    cpu_speed_mhz: int | None
+    cpu_count: int | None
+    ram_slots_total: int | None
+    ram_slots_used: int | None
+    os_architecture: str | None
+    os_install_date: datetime | None
+    last_boot_time: datetime | None
+    # Deliberately not last_seen: a poste seen a minute ago whose inventory is
+    # three weeks old is an anomaly the console has to be able to show.
+    inventory_last_seen: datetime | None
+    memory_modules: list[MemoryModuleOut] = []
+    disks: list[DiskOut] = []
+    volumes: list[VolumeOut] = []
+    nics: list[NicOut] = []
+    gpus: list[GpuOut] = []
+    # The software list rides along with the rest for the same reason as the
+    # pending updates: it is read on this page and nowhere else, and a few
+    # hundred rows do not deserve a round trip of their own.
+    software: list[InstalledSoftwareOut] = []
+
 
 class MachineList(BaseModel):
     """Paginated machine list."""
@@ -161,18 +328,30 @@ MachineSortField = Literal[
     "wu_pending_count",
     "session_user_present",
     "last_seen",
+    # Inventory. "quel modèle" and "lequel n'a plus de place" are the two the
+    # list is sorted by; the free space is a *percentage*, because 40 Go left on
+    # a 4 To disk and on a 128 Go SSD are not the same news.
+    "hw_model",
+    "ram_total_mb",
+    "disk_free_percent",
 ]
-_SORT_COLUMNS = {
-    "hostname": Machine.hostname,
-    "domain": Machine.domain,
-    "av_product_name": Machine.av_product_name,
-    "wu_pending_count": Machine.wu_pending_count,
-    "session_user_present": Machine.session_user_present,
-    "last_seen": Machine.last_seen,
-}
+
 # Sorted case-folded: under a C collation "ZEUS" would otherwise come before
 # "alpha", which no reader of a hostname column expects.
-_CASEFOLD_SORT_FIELDS = {"hostname", "domain", "av_product_name"}
+_CASEFOLD_SORT_FIELDS = {"hostname", "domain", "av_product_name", "hw_model"}
+
+
+def _sort_key(field: MachineSortField) -> Any:
+    """The expression a sort orders by.
+
+    Expressions and not columns, since this one was extended: the free-space
+    percentage is derived from two columns and has none of its own, and it has
+    to be sortable like any other.
+    """
+    if field == "disk_free_percent":
+        return disk_free_percent()
+    column = col(getattr(Machine, field))
+    return func.lower(column) if field in _CASEFOLD_SORT_FIELDS else column
 
 
 def _sort_clause(field: MachineSortField, descending: bool) -> UnaryExpression[Any]:
@@ -181,9 +360,8 @@ def _sort_clause(field: MachineSortField, descending: bool) -> UnaryExpression[A
     NULLs last in both directions: "never reported" is an absence, not a value,
     and it must not lead the list whichever way the reader flips the arrow.
     """
-    column = col(_SORT_COLUMNS[field])
-    key = func.lower(column) if field in _CASEFOLD_SORT_FIELDS else column
-    ordered = key.desc() if descending else key.asc()
+    key: Any = _sort_key(field)
+    ordered: UnaryExpression[Any] = key.desc() if descending else key.asc()
     return ordered.nulls_last()
 
 
@@ -224,6 +402,97 @@ def _search_clause(search: str) -> ColumnElement[bool]:
     return or_(*clauses)
 
 
+@dataclass(frozen=True)
+class MachineFilters:
+    """Every facet the machine list understands.
+
+    A dataclass rather than a dozen parameters threaded twice: the CSV export is
+    the same query without the pagination, and an export that silently ignored
+    half the filters the reader had set would be worse than no export at all.
+    """
+
+    search: str | None = None
+    domain: str | None = None
+    antivirus: str | None = None
+    os_version: str | None = None
+    status: MachineStatus | None = None
+    online: bool | None = None
+    wu_status: WindowsUpdateFilter | None = None
+    scan_type: ScanFilter | None = None
+    scan_older_than_days: int = 7
+    with_active_threats: bool | None = None
+    hw_model: str | None = None
+    hw_manufacturer: str | None = None
+    disk_free_below: int | None = None
+    software_id: int | None = None
+
+
+def _filtered_machines(filters: MachineFilters) -> Any:
+    """The machine SELECT with every requested facet applied."""
+    stmt = select(Machine)
+    if filters.search:
+        stmt = stmt.where(_search_clause(filters.search))
+    if filters.domain:
+        stmt = stmt.where(col(Machine.domain) == filters.domain)
+    if filters.antivirus:
+        # Substring rather than equality, unlike the domain filter: the dropdown
+        # feeds it exact names from the fleet, but a hand-typed "eset" must find
+        # "ESET Endpoint Security" too — vendors rename their products between
+        # versions and a parc runs several at once.
+        stmt = stmt.where(col(Machine.av_product_name).ilike(f"%{filters.antivirus}%"))
+    if filters.os_version:
+        # Substring like the antivirus filter, and for the same reason: the
+        # dropdown feeds exact values, but "Windows 10" typed by hand must
+        # gather every build of it.
+        stmt = stmt.where(col(Machine.os_version).ilike(f"%{filters.os_version}%"))
+    if filters.hw_model:
+        # Substring again: "OptiPlex" has to gather the 7010 and the 7020, which
+        # is how a parc is actually reasoned about.
+        stmt = stmt.where(col(Machine.hw_model).ilike(f"%{filters.hw_model}%"))
+    if filters.hw_manufacturer:
+        stmt = stmt.where(
+            col(Machine.hw_manufacturer).ilike(f"%{filters.hw_manufacturer}%")
+        )
+    if filters.disk_free_below is not None:
+        stmt = stmt.where(low_disk_clause(filters.disk_free_below))
+    if filters.software_id is not None:
+        # The drill-down behind every row of the software catalogue. An EXISTS
+        # and not a join: a machine carries one row per program, and joining
+        # would return it once per match — here there is at most one, but the
+        # shape is what keeps the pagination count honest.
+        stmt = stmt.where(
+            exists().where(
+                (col(MachineSoftware.machine_id) == col(Machine.id))
+                & (col(MachineSoftware.software_id) == filters.software_id)
+            )
+        )
+    if filters.status is not None:
+        stmt = stmt.where(
+            status_clause(filters.status, utcnow(), settings.INACTIVE_AFTER_DAYS)
+        )
+    if filters.online is not None:
+        # Its own axis, not a MachineStatus value: "allumé maintenant" must stay
+        # combinable with the antivirus statuses — the everyday question is
+        # "which postes are outdated *and* on, so a scan sent now will land".
+        stmt = stmt.where(
+            online_clause(filters.online, utcnow(), settings.OFFLINE_AFTER_SECONDS)
+        )
+    if filters.wu_status is not None:
+        stmt = stmt.where(windows_update_clause(filters.wu_status))
+    if filters.scan_type is not None:
+        cutoff = utcnow() - timedelta(days=filters.scan_older_than_days)
+        stmt = stmt.where(scan_clause(filters.scan_type, cutoff))
+    if filters.with_active_threats is not None:
+        # Same definition as the dashboard's "avec menaces" KPI: at least one
+        # threat Defender has not dealt with. False selects the complement.
+        active = exists().where(
+            (col(Threat.machine_id) == col(Machine.id))
+            & (col(Threat.status) == "active")
+        )
+        stmt = stmt.where(active if filters.with_active_threats else ~active)
+    return stmt
+
+
 @router.get("", response_model=MachineList)
 async def list_machines(
     session: SessionDep,
@@ -237,6 +506,10 @@ async def list_machines(
     scan_type: ScanFilter | None = None,
     scan_older_than_days: int = Query(7, ge=1),
     with_active_threats: bool | None = None,
+    hw_model: str | None = None,
+    hw_manufacturer: str | None = None,
+    disk_free_below: int | None = Query(None, ge=1, le=100),
+    software_id: int | None = None,
     sort_by: MachineSortField | None = None,
     sort_desc: bool = True,
     page: int = Query(1, ge=1),
@@ -244,49 +517,30 @@ async def list_machines(
 ) -> MachineList:
     """List machines with optional search/domain/antivirus/OS/status filters,
     plus the two facets the dashboard cards link to (Windows Update state and
-    the presence of an active threat) and a scan-freshness facet — which postes
-    no quick/full scan has visited within ``scan_older_than_days``. Sortable on
-    the console list's own columns; the default order is freshest contact first.
+    the presence of an active threat), a scan-freshness facet — which postes no
+    quick/full scan has visited within ``scan_older_than_days`` — and the
+    inventory facets: model, manufacturer, system volume below a percentage of
+    free space, and "carries this program". Sortable on the console list's own
+    columns; the default order is freshest contact first.
     """
-    stmt = select(Machine)
-    if search:
-        stmt = stmt.where(_search_clause(search))
-    if domain:
-        stmt = stmt.where(col(Machine.domain) == domain)
-    if antivirus:
-        # Substring rather than equality, unlike the domain filter: the dropdown
-        # feeds it exact names from the fleet, but a hand-typed "eset" must find
-        # "ESET Endpoint Security" too — vendors rename their products between
-        # versions and a parc runs several at once.
-        stmt = stmt.where(col(Machine.av_product_name).ilike(f"%{antivirus}%"))
-    if os_version:
-        # Substring like the antivirus filter, and for the same reason: the
-        # dropdown feeds exact values, but "Windows 10" typed by hand must
-        # gather every build of it.
-        stmt = stmt.where(col(Machine.os_version).ilike(f"%{os_version}%"))
-    if status is not None:
-        stmt = stmt.where(status_clause(status, utcnow(), settings.INACTIVE_AFTER_DAYS))
-    if online is not None:
-        # Its own axis, not a MachineStatus value: "allumé maintenant" must stay
-        # combinable with the antivirus statuses — the everyday question is
-        # "which postes are outdated *and* on, so a scan sent now will land".
-        stmt = stmt.where(
-            online_clause(online, utcnow(), settings.OFFLINE_AFTER_SECONDS)
+    stmt = _filtered_machines(
+        MachineFilters(
+            search=search,
+            domain=domain,
+            antivirus=antivirus,
+            os_version=os_version,
+            status=status,
+            online=online,
+            wu_status=wu_status,
+            scan_type=scan_type,
+            scan_older_than_days=scan_older_than_days,
+            with_active_threats=with_active_threats,
+            hw_model=hw_model,
+            hw_manufacturer=hw_manufacturer,
+            disk_free_below=disk_free_below,
+            software_id=software_id,
         )
-    if wu_status is not None:
-        stmt = stmt.where(windows_update_clause(wu_status))
-    if scan_type is not None:
-        cutoff = utcnow() - timedelta(days=scan_older_than_days)
-        stmt = stmt.where(scan_clause(scan_type, cutoff))
-    if with_active_threats is not None:
-        # Same definition as the dashboard's "avec menaces" KPI: at least one
-        # threat Defender has not dealt with. False selects the complement.
-        active = exists().where(
-            (col(Threat.machine_id) == col(Machine.id))
-            & (col(Threat.status) == "active")
-        )
-        stmt = stmt.where(active if with_active_threats else ~active)
-
+    )
     total = await session.scalar(select(func.count()).select_from(stmt.subquery()))
     # last_seen then id behind the requested column: ties must land on the same
     # page from one request to the next, or rows duplicate and vanish across
@@ -376,6 +630,167 @@ async def list_os_versions(session: SessionDep) -> list[OsVersion]:
         for version, count in rows.all()
         if version
     ]
+
+
+class FleetValue(BaseModel):
+    """One distinct inventory value present in the fleet, with its count."""
+
+    name: str
+    count: int
+
+
+async def _distinct_values(session: SessionDep, column: Any) -> list[FleetValue]:
+    """Distinct non-empty values of one machine column, most widespread first.
+
+    The shape ``/antivirus-products`` and ``/os-versions`` already established:
+    what a parc contains is fleet data, not a list a client can hardcode, and
+    the counts double as an inventory in their own right.
+    """
+    name = col(column)
+    rows = await session.exec(
+        select(name, func.count().label("count"))
+        .where(name.is_not(None))
+        .where(name != "")
+        .group_by(name)
+        .order_by(func.count().desc(), name)
+    )
+    # `if value` narrows away the NULL the SQL already excluded.
+    return [FleetValue(name=value, count=count) for value, count in rows.all() if value]
+
+
+# Declared before ``/{machine_id}`` like the two listings above: FastAPI matches
+# in declaration order, and "models" would otherwise be read as an id.
+@router.get("/models", response_model=list[FleetValue])
+async def list_models(session: SessionDep) -> list[FleetValue]:
+    """Hardware models present in the fleet, most widespread first.
+
+    The renewal plan reads this list top-down, and the console's model filter
+    is fed from it.
+    """
+    return await _distinct_values(session, Machine.hw_model)
+
+
+@router.get("/manufacturers", response_model=list[FleetValue])
+async def list_manufacturers(session: SessionDep) -> list[FleetValue]:
+    """Hardware manufacturers present in the fleet, most widespread first."""
+    return await _distinct_values(session, Machine.hw_manufacturer)
+
+
+# The fleet export, and deliberately not a per-machine one. A fiche is read on
+# screen; and one machine's inventory is heterogeneous — sticks, disks, volumes,
+# adapters, programs — so a CSV of it is a shape nobody can pivot. What gets
+# asked for is the parc: one row per poste, opened in Excel, sorted on whatever
+# column the meeting is about.
+@router.get("/export.csv")
+async def export_machines(
+    session: SessionDep,
+    search: str | None = None,
+    domain: str | None = None,
+    antivirus: str | None = None,
+    os_version: str | None = None,
+    status: MachineStatus | None = None,
+    online: bool | None = None,
+    wu_status: WindowsUpdateFilter | None = None,
+    scan_type: ScanFilter | None = None,
+    scan_older_than_days: int = Query(7, ge=1),
+    with_active_threats: bool | None = None,
+    hw_model: str | None = None,
+    hw_manufacturer: str | None = None,
+    disk_free_below: int | None = Query(None, ge=1, le=100),
+    software_id: int | None = None,
+) -> Response:
+    """The filtered fleet as a spreadsheet — every facet of the list, no pages.
+
+    Unpaginated on purpose: an export of the first fifty rows is not an export.
+    The filters are the same ones, and they are what bounds it — a parc is
+    thousands of rows, not millions.
+    """
+    stmt = _filtered_machines(
+        MachineFilters(
+            search=search,
+            domain=domain,
+            antivirus=antivirus,
+            os_version=os_version,
+            status=status,
+            online=online,
+            wu_status=wu_status,
+            scan_type=scan_type,
+            scan_older_than_days=scan_older_than_days,
+            with_active_threats=with_active_threats,
+            hw_model=hw_model,
+            hw_manufacturer=hw_manufacturer,
+            disk_free_below=disk_free_below,
+            software_id=software_id,
+        )
+    ).order_by(func.lower(col(Machine.hostname)).nulls_last(), col(Machine.id))
+    rows = await session.exec(stmt)
+    return csv_response(
+        "parc.csv",
+        [
+            "Nom",
+            "Domaine",
+            "Adresse IP",
+            "OS",
+            "Architecture",
+            "Constructeur",
+            "Modèle",
+            "N° de série",
+            "Châssis",
+            "Processeur",
+            "Cœurs",
+            "RAM (Mio)",
+            "Disque système (Mio)",
+            "Libre (Mio)",
+            "Libre (%)",
+            "BIOS",
+            "Date BIOS",
+            "Antivirus",
+            "MAJ en attente",
+            "Inventaire du",
+            "Vu le",
+        ],
+        [
+            (
+                m.hostname,
+                m.domain,
+                m.ip_address,
+                m.os_version,
+                m.os_architecture,
+                m.hw_manufacturer,
+                m.hw_model,
+                m.hw_serial,
+                m.hw_chassis_type,
+                m.cpu_model,
+                m.cpu_cores,
+                m.ram_total_mb,
+                m.system_volume_total_mb,
+                m.system_volume_free_mb,
+                _free_percent(m),
+                m.bios_version,
+                m.bios_date.isoformat() if m.bios_date else None,
+                m.av_product_name,
+                m.wu_pending_count,
+                m.inventory_last_seen.date().isoformat()
+                if m.inventory_last_seen
+                else None,
+                m.last_seen.date().isoformat(),
+            )
+            for m in rows.all()
+        ],
+    )
+
+
+def _free_percent(machine: Machine) -> int | None:
+    """Free space as a whole percentage, or NULL when there is nothing to divide.
+
+    Rounded to an integer for the spreadsheet: "12" is what the column is read
+    for, and "12.34567901234568" is what a float would put in the cell.
+    """
+    total = machine.system_volume_total_mb
+    free = machine.system_volume_free_mb
+    if not total or free is None:
+        return None
+    return round(free * 100 / total)
 
 
 class WakeRequest(BaseModel):
@@ -536,7 +951,84 @@ async def _machine_detail(session: SessionDep, machine: Machine) -> MachineDetai
     )
     detail = MachineDetailOut.model_validate(machine)
     detail.pending_updates = [PendingUpdateOut.model_validate(u) for u in rows.all()]
+    await _attach_inventory(session, machine, detail)
     return detail
+
+
+async def _attach_inventory(
+    session: SessionDep, machine: Machine, detail: MachineDetailOut
+) -> None:
+    """Load the six inventory sets onto a detail payload.
+
+    Six small queries rather than one join: they land in six independent lists
+    with nothing in common but the machine, and a join would multiply the rows
+    of each by the count of the others. Each is a handful of rows behind the
+    index on ``machine_id`` — except the software list, which is the reason the
+    fiche is worth a page rather than a card.
+
+    Every set is ordered explicitly. Insertion order is WMI's enumeration order,
+    which is not stable between two collections, and a fiche whose disks swap
+    places on refresh reads as a change that did not happen.
+    """
+    memory = await session.exec(
+        select(MemoryModule)
+        .where(col(MemoryModule.machine_id) == machine.id)
+        .order_by(col(MemoryModule.slot))
+    )
+    detail.memory_modules = [MemoryModuleOut.model_validate(m) for m in memory.all()]
+
+    disks = await session.exec(
+        select(Disk)
+        .where(col(Disk.machine_id) == machine.id)
+        .order_by(col(Disk.device_id))
+    )
+    detail.disks = [DiskOut.model_validate(d) for d in disks.all()]
+
+    volumes = await session.exec(
+        select(Volume)
+        .where(col(Volume.machine_id) == machine.id)
+        .order_by(col(Volume.letter))
+    )
+    detail.volumes = [VolumeOut.model_validate(v) for v in volumes.all()]
+
+    # Connected adapters first: a laptop reports a dozen, of which one is
+    # carrying the traffic, and that is the one being looked for.
+    nics = await session.exec(
+        select(Nic)
+        .where(col(Nic.machine_id) == machine.id)
+        .order_by(col(Nic.is_up).desc(), col(Nic.is_virtual), col(Nic.key))
+    )
+    detail.nics = [NicOut.model_validate(n) for n in nics.all()]
+
+    gpus = await session.exec(
+        select(Gpu).where(col(Gpu.machine_id) == machine.id).order_by(col(Gpu.name))
+    )
+    detail.gpus = [GpuOut.model_validate(g) for g in gpus.all()]
+
+    # The one join of the six: the link table holds the install facts, the
+    # catalogue holds the identity, and the console needs both on one line.
+    # Ordered case-folded — under a C collation "Zoom" would come before
+    # "abcde", which no reader of an alphabetical list expects.
+    installed = await session.exec(
+        select(MachineSoftware, Software)
+        .join(Software, col(MachineSoftware.software_id) == col(Software.id))
+        .where(col(MachineSoftware.machine_id) == machine.id)
+        .order_by(func.lower(col(Software.name)), col(Software.version))
+    )
+    detail.software = [
+        InstalledSoftwareOut(
+            software_id=soft.id if soft.id is not None else 0,
+            name=soft.name,
+            version=soft.version,
+            publisher=soft.publisher,
+            install_date=link.install_date,
+            arch=link.arch,
+            source=link.source,
+            install_location=link.install_location,
+            first_seen=link.first_seen,
+        )
+        for link, soft in installed.all()
+    ]
 
 
 @router.get("/{machine_id}", response_model=MachineDetailOut)

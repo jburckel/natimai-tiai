@@ -16,7 +16,7 @@ Construire un agent léger déployé par GPO sur les postes Windows, un backend 
 | **Defender** : état, scans à distance, mise à jour des signatures | 🔴 Urgent | Maintenant |
 | Windows Update | 🟠 Moyen | Fin d'année |
 | Déploiement logiciel | 🟡 Bas | Fin d'année |
-| Inventaire matériel/logiciel | 🟡 Bas | Fin d'année |
+| Inventaire matériel/logiciel | 🟡 Bas | Fin d'année — 🟢 livré |
 
 Tout le projet est pensé pour que l'ajout des modules suivants réutilise **le même agent, le même canal de communication et le même modèle de commandes** — seuls les types de commandes et les données remontées changent.
 
@@ -372,7 +372,7 @@ commands               -- file de commandes (une ligne par poste, même en broad
 Cadrée et livrée : cf. `plan-phase2-windows-update.md`. Réutilise l'agent et la file de commandes — quatre nouveaux types (`wu_scan`, `wu_install`, `wu_install_full`, `reboot`) et un bloc `windows_update` optionnel sur le heartbeat. **Jamais d'auto-redémarrage** : le poste signale qu'il en attend un, la commande est déclenchée à part. L'historique des KB installés et les fenêtres de maintenance restent hors périmètre de cette itération (§4 du plan de phase : le design les absorbe sans refonte).
 
 ### Phase 3 — Déploiement logiciel + inventaire *(fin d'année)*
-- Inventaire : remontée matériel/logiciel (réutilise heartbeat avec un nouveau bloc de données).
+- **Inventaire : 🟢 livré** — cf. `plan-inventaire.md`. Un bloc `inventory` optionnel sur le heartbeat, un type de commande (`inventory_scan`), sept tables et un catalogue logiciel à l'échelle du parc. Le `software.id` de ce catalogue est la prise à laquelle le déploiement se rattachera.
 - Déploiement : nouveau type de commande « installer un paquet » + dépôt de paquets (à concevoir : stockage, intégrité, versions).
 
 ---
@@ -632,3 +632,69 @@ Points permanents : binaire agent **signé**, validation stricte des entrées AP
 - **Réseau** : serveur joignable **uniquement en interne** (LAN). Pas de VPN ni d'exposition Internet prévus à ce jour.
 - **Environnement** : parc **mixte** — postes en domaine AD **et** postes en workgroup. Le déploiement par GPO couvre les postes du domaine ; les postes en workgroup sont provisionnés par script/MSI (agent, racine AC interne, secret d'enrôlement).
 - **Canal d'alerte** : **e-mail** via l'**API Mailgun** (premier canal ; d'autres canaux non prévus pour l'instant).
+
+**Instantané — 2026-08-31** · **Inventaire matériel et logiciel** livré de bout
+en bout (cf. `plan-inventaire.md`) : la console dit ce que chaque poste *est* —
+constructeur, châssis, carte mère, BIOS, processeur, barrettes et emplacements
+libres, disques, volumes, cartes réseau, cartes graphiques — et ce qu'il
+*porte*. Le vocabulaire et le découpage attribut/table sont repris du **schéma
+d'inventaire de GLPI**, qui a vingt ans de terrain derrière lui ; ce qui est
+écarté, c'est son agent : un second service, une seconde chaîne GPO et une
+seconde signature sur chaque poste, pour une donnée qui atterrirait dans un
+serveur sans lien avec les commandes de la console.
+> **Le bloc a son propre rythme, plus lent encore que Windows Update, et il est
+surtout le seul à ne rien envoyer quand il n'a rien à dire.** Collecte toutes
+les 24 h, première passe 3 min après le démarrage (un portable allumé une
+matinée doit être inventorié) ; l'agent **hache** ce qu'il a lu, listes triées
+d'abord, et n'attache le bloc que si le hachage a bougé. Un poste stable envoie
+son inventaire une fois, puis plus jamais. Le serveur porte le **même test** en
+second rideau : un agent qui a redémarré a oublié ce qu'il avait envoyé, et un
+hachage identique lui épargne sept remplacements d'ensemble.
+> **`Win32_Product` est la classe qu'on n'interroge pas**, et c'est la décision
+technique du chantier. L'énumérer déclenche une vérification de cohérence MSI de
+**chaque** paquet installé : des minutes de requête et un événement 1035 dans le
+journal Application de tous les postes du parc, tous les jours. Les logiciels
+sont donc lus dans le registre (`…\CurrentVersion\Uninstall`, **et** sa vue
+`WOW6432Node` — l'oublier fait perdre un tiers du parc logiciel), nativement en
+Go, en quelques dizaines de millisecondes et sans effet de bord. Quatre règles de
+filtrage alignées sur ce qu'affiche « Applications et fonctionnalités », parce
+qu'un administrateur comparera les deux écrans.
+> **Catalogue normalisé plutôt que liste dénormalisée** (`software` +
+`machine_software`), et ce n'est pas le volume qui tranche — 250 000 lignes ne
+sont rien. Ce sont deux usages : « qui a encore Java 8 » devient un `GROUP BY`
+sur quelques milliers de lignes, et le **déploiement logiciel de la même phase**
+a besoin d'un identifiant stable auquel accrocher un paquet. `version` et
+`publisher` sont `NOT NULL` avec un défaut vide : Postgres considère les NULL
+comme distincts dans une contrainte d'unicité, et un éditeur nullable ferait
+accumuler une ligne de catalogue par poste au moindre logiciel sans éditeur.
+> **Trois états sur chaque section, et c'est porteur** : `null` = pas lu (agent
+trop ancien, espace de noms WMI absent sur ce SKU) et l'ensemble stocké est
+laissé tel quel ; `[]` = lu et vide, et il est effacé. Une VM n'a réellement
+aucune barrette. Surtout, un poste dont la collecte logicielle est coupée par GPO
+(`ReportSoftware=0`) envoie une liste **vide** et non un champ absent : sans quoi
+l'interrupteur laisserait la liste précédente dormir en base, et ne garantirait
+rien.
+> **Les cartes réseau n'ont coûté qu'un second parcours**, pas un collecteur :
+`GetAdaptersAddresses` était déjà là pour élire l'adresse du poste. Le parcours
+est délibérément séparé de l'élection plutôt que paramétré par un drapeau — les
+deux filtrent à l'opposé (l'élection veut des candidats *routables et actifs*,
+l'inventaire veut *toutes* les cartes, débranchées comprises) — et l'adresse
+élue reste sur les colonnes du poste : elle est relue toutes les 60 s parce
+qu'un paquet magique la vise, quand cette liste a un jour d'âge.
+> **Deux pièges attrapés par les outils, aucun par relecture.** (1) Les cinq
+tables enfants partageaient une classe de base déclarant `id`/`machine_id` : un
+`sa_column` appartient à *une* table, la première créée réclamait les objets
+`Column` et les quatre suivantes échouaient — la règle même que documente
+`utc_field`. (2) **`alembic check`** a trouvé six colonnes en `BigInteger` dans
+la migration et `int` dans les modèles : le schéma des tests (`create_all`) et
+celui de la production auraient divergé en silence. Les deux **tests-gardes** du
+catalogue de commandes, back et front, sont tombés sur `inventory_scan` — ils
+sont conçus pour ça.
+> Vérifications : **362 tests backend** verts sur Postgres 16 (`ruff`,
+`mypy --strict`), migration `0014_inventory` rejouée `upgrade`/`downgrade`/`upgrade`
+sur base vierge puis `alembic check` ; Go `gofmt`/`vet`/`test` verts, builds
+croisés `windows/amd64`, `windows/arm64` et Linux ; **168 vitest**, `vue-tsc`,
+`prettier` et build SPA verts. **Reste à valider sur poste réel** : toute la
+couche WMI et registre, qui ne peut pas l'être ailleurs — et en tête la
+comparaison ligne à ligne de la liste des logiciels avec « Applications et
+fonctionnalités », qui est le seul juge des quatre règles de filtrage.

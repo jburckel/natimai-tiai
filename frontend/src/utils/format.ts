@@ -420,3 +420,189 @@ export const EMAIL_PREFERENCE_OPTIONS: {
 export function emailPreferenceLabel(preference: string | null | undefined): string {
   return EMAIL_PREFERENCE_OPTIONS.find((o) => o.value === preference)?.label ?? '—';
 }
+
+// --- Inventory ---------------------------------------------------------------
+
+/**
+ * A size in mebibytes, rendered in the unit a human would use.
+ *
+ * Binary units throughout (Mio, Gio, Tio), because that is what the source
+ * reports: Windows divides by 1024 and so does everything the figure will be
+ * compared against — the properties dialog, the disk manager. Rendering 1024 Mio
+ * as "1.07 Go" would be arithmetically defensible and would not match a single
+ * other screen the reader has open.
+ */
+export function sizeLabel(mb: number | null | undefined): string {
+  if (mb == null) return '—';
+  if (mb < 1024) return `${Math.round(mb)} Mio`;
+  const gib = mb / 1024;
+  if (gib < 1024) {
+    // One decimal below ten, none above: "3,5 Gio" is useful, "487,3 Gio" is not.
+    return `${gib < 10 ? gib.toFixed(1) : Math.round(gib)} Gio`;
+  }
+  return `${(gib / 1024).toFixed(1)} Tio`;
+}
+
+/** Free space as a whole percentage, or null when there is nothing to divide. */
+export function freePercent(
+  totalMb: number | null | undefined,
+  freeMb: number | null | undefined,
+): number | null {
+  if (!totalMb || freeMb == null) return null;
+  return Math.round((freeMb / totalMb) * 100);
+}
+
+/**
+ * The colour of a volume's occupancy bar.
+ *
+ * Two thresholds, and the lower one is not decorative: below roughly ten percent
+ * Windows Update stops being able to stage a cumulative update, so a poste
+ * crosses it and then quietly stops patching. That is the moment the bar has to
+ * be red.
+ */
+export function diskColor(percentFree: number | null): string {
+  if (percentFree == null) return 'grey-5';
+  if (percentFree < 10) return 'negative';
+  if (percentFree < 20) return 'orange';
+  return 'positive';
+}
+
+const MEDIA_TYPE_LABELS: Record<string, string> = {
+  SSD: 'SSD',
+  HDD: 'Disque dur',
+  NVMe: 'SSD NVMe',
+  SCM: 'Mémoire persistante',
+  unknown: 'Type inconnu',
+};
+
+/**
+ * A drive's media type in words.
+ *
+ * "Type inconnu" is a real answer and not a missing one: the WMI class that
+ * always responds cannot tell an SSD from a hard disk, and a host without the
+ * Storage namespace falls back to it. Saying so beats an empty cell that reads
+ * as a bug.
+ */
+export function mediaTypeLabel(value: string | null | undefined): string {
+  if (!value) return '—';
+  return MEDIA_TYPE_LABELS[value] ?? value;
+}
+
+const CHASSIS_LABELS: Record<string, string> = {
+  desktop: 'Poste fixe',
+  laptop: 'Portable',
+  tablet: 'Tablette',
+  'all-in-one': 'Tout-en-un',
+  server: 'Serveur',
+};
+
+export function chassisLabel(value: string | null | undefined): string {
+  if (!value) return '—';
+  return CHASSIS_LABELS[value] ?? value;
+}
+
+const ENCRYPTION_LABELS: Record<string, string> = {
+  FullyEncrypted: 'Chiffré',
+  FullyDecrypted: 'Non chiffré',
+  EncryptionInProgress: 'Chiffrement en cours',
+  DecryptionInProgress: 'Déchiffrement en cours',
+  EncryptionPaused: 'Chiffrement en pause',
+  DecryptionPaused: 'Déchiffrement en pause',
+};
+
+/**
+ * BitLocker status in words. null is "non relevé", which is deliberately *not*
+ * "non chiffré": the WMI class is absent on some SKUs and needs elevation, and
+ * an alarm on a machine that may well be encrypted is how a dashboard gets
+ * ignored.
+ */
+export function encryptionLabel(value: string | null | undefined): string {
+  if (!value) return 'Non relevé';
+  return ENCRYPTION_LABELS[value] ?? value;
+}
+
+export function encryptionColor(value: string | null | undefined): string {
+  if (!value) return 'grey-6';
+  if (value === 'FullyEncrypted') return 'positive';
+  if (value === 'FullyDecrypted') return 'negative';
+  return 'orange';
+}
+
+const NIC_TYPE_LABELS: Record<string, string> = {
+  ethernet: 'Ethernet',
+  wifi: 'Wi-Fi',
+  other: 'Autre',
+};
+
+export function nicTypeLabel(value: string | null | undefined): string {
+  if (!value) return '—';
+  return NIC_TYPE_LABELS[value] ?? value;
+}
+
+/** A link speed in the unit it is quoted in — 1 Gb/s, not 1000 Mb/s. */
+export function linkSpeedLabel(mbps: number | null | undefined): string {
+  if (mbps == null) return '—';
+  if (mbps >= 1000) {
+    const gbps = mbps / 1000;
+    return `${Number.isInteger(gbps) ? gbps : gbps.toFixed(1)} Gb/s`;
+  }
+  return `${mbps} Mb/s`;
+}
+
+/**
+ * A CPU in one line: model, then what it actually has.
+ *
+ * The core and thread counts are appended rather than given rows of their own
+ * because they are read together — "un i7 8 cœurs" is one fact, not three.
+ */
+export function cpuLabel(
+  model: string | null,
+  cores: number | null,
+  threads: number | null,
+  count: number | null,
+): string {
+  if (!model) return '—';
+  const parts: string[] = [];
+  if (count && count > 1) parts.push(`${count} processeurs`);
+  if (cores) parts.push(`${cores} cœurs`);
+  if (threads) parts.push(`${threads} threads`);
+  return parts.length ? `${model} (${parts.join(', ')})` : model;
+}
+
+/** RAM as "32 Gio (2 barrettes sur 4)" — the sentence an upgrade decision needs. */
+export function ramLabel(
+  totalMb: number | null,
+  slotsUsed: number | null,
+  slotsTotal: number | null,
+): string {
+  if (totalMb == null) return '—';
+  const size = sizeLabel(totalMb);
+  if (slotsUsed == null || slotsTotal == null || slotsTotal === 0) return size;
+  return `${size} (${slotsUsed} barrette(s) sur ${slotsTotal})`;
+}
+
+/**
+ * A date without its time, for the fields that are dates: a BIOS release, an
+ * install date. `formatDateTime` would append a midnight nobody reported.
+ */
+export function formatDate(value: string | null | undefined): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString('fr-FR');
+}
+
+/**
+ * Hand a fetched blob to the browser as a download.
+ *
+ * The exports are fetched rather than linked because the API needs the
+ * Authorization header; this is what turns the response back into a file.
+ */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
