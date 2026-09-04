@@ -62,7 +62,8 @@ export function useMachineNavigation(): MachineNavigation {
   const backQuery = computed(() => {
     const query: Record<string, string> = {};
     for (const [key, value] of Object.entries(route.query)) {
-      if (key === 'i') continue;
+      // Neither the rank nor the fiche's own tab belongs to the list's query.
+      if (key === 'i' || key === 'tab') continue;
       const scalar = queryValue(value);
       if (scalar) query[key] = scalar;
     }
@@ -137,10 +138,14 @@ export function useMachineNavigation(): MachineNavigation {
 
   function go(machine: Machine | null, rank: number) {
     if (!machine) return;
+    // The tab travels with the walk: comparing the hardware of ten postes in a
+    // row is exactly what the arrows are for, and landing on « Identité » each
+    // time would cost a click per poste.
+    const tab = queryValue(route.query.tab);
     void router.push({
       name: 'machine-detail',
       params: { id: machine.id },
-      query: { ...backQuery.value, i: String(rank) },
+      query: { ...backQuery.value, ...(tab ? { tab } : {}), i: String(rank) },
     });
   }
 
