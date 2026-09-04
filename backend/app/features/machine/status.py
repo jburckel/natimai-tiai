@@ -228,6 +228,33 @@ def disk_free_percent() -> ColumnElement[Any]:
     )
 
 
+def ram_nominal_gb() -> ColumnElement[Any]:
+    """Installed memory as the whole number of GiB printed on the box.
+
+    Windows reports what it can address, which is a few hundred MiB short of
+    the sticks' sum — a 16 GiB poste says 16 289 MiB. Rounding *up* recovers the
+    nominal size, so "au moins 16 Gio" finds every 16 GiB machine rather than
+    none of them. NULL stays NULL: never reported is not zero memory.
+    """
+    return func.ceil(col(Machine.ram_total_mb) / 1024.0)
+
+
+def ram_clause(min_gb: int | None, max_gb: int | None) -> ColumnElement[bool]:
+    """Machines whose nominal memory sits within [min_gb, max_gb], GiB, inclusive.
+
+    Either bound may be absent. A machine that never reported its memory
+    matches neither — the filter exists to find postes to upgrade, and an
+    absence is not a small memory.
+    """
+    nominal = ram_nominal_gb()
+    clauses: list[ColumnElement[bool]] = [col(Machine.ram_total_mb).is_not(None)]
+    if min_gb is not None:
+        clauses.append(nominal >= min_gb)
+    if max_gb is not None:
+        clauses.append(nominal <= max_gb)
+    return and_(*clauses)
+
+
 def low_disk_clause(percent: int) -> ColumnElement[bool]:
     """Machines whose system volume is below ``percent`` free.
 

@@ -3,7 +3,7 @@
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field, computed_field
@@ -11,8 +11,10 @@ from sqlalchemy import case, exists, func, or_
 from sqlalchemy.sql.elements import ColumnElement, UnaryExpression
 from sqlmodel import col, select
 
+from app.api import machine_export
 from app.api.csv_export import csv_response
 from app.api.deps import CurrentUser, SessionDep, require_permission
+from app.api.xlsx_export import xlsx_response
 from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
 from app.features.audit import crud as audit
@@ -38,6 +40,7 @@ from app.features.machine.status import (
     is_online,
     low_disk_clause,
     online_clause,
+    ram_clause,
     scan_clause,
     status_clause,
     windows_update_clause,
@@ -423,8 +426,66 @@ class MachineFilters:
     with_active_threats: bool | None = None
     hw_model: str | None = None
     hw_manufacturer: str | None = None
+    # Inventory facets a renewal plan is drawn with: which processor, how much
+    # memory, which kind of poste. The memory bounds are in whole GiB — the
+    # unit anyone thinks in — and inclusive on both ends.
+    cpu_model: str | None = None
+    hw_chassis_type: str | None = None
+    ram_min_gb: int | None = None
+    ram_max_gb: int | None = None
     disk_free_below: int | None = None
     software_id: int | None = None
+
+
+def machine_filters(
+    search: str | None = None,
+    domain: str | None = None,
+    antivirus: str | None = None,
+    os_version: str | None = None,
+    status: MachineStatus | None = None,
+    online: bool | None = None,
+    wu_status: WindowsUpdateFilter | None = None,
+    scan_type: ScanFilter | None = None,
+    scan_older_than_days: int = Query(7, ge=1),
+    with_active_threats: bool | None = None,
+    hw_model: str | None = None,
+    hw_manufacturer: str | None = None,
+    cpu_model: str | None = None,
+    hw_chassis_type: str | None = None,
+    ram_min_gb: int | None = Query(None, ge=1),
+    ram_max_gb: int | None = Query(None, ge=1),
+    disk_free_below: int | None = Query(None, ge=1, le=100),
+    software_id: int | None = None,
+) -> MachineFilters:
+    """The list's facets as query parameters, shared by the list and the exports.
+
+    One dependency rather than the same twenty parameters declared three times:
+    a facet added to the list and forgotten by an export would make the export
+    silently broader than the screen the reader was looking at.
+    """
+    return MachineFilters(
+        search=search,
+        domain=domain,
+        antivirus=antivirus,
+        os_version=os_version,
+        status=status,
+        online=online,
+        wu_status=wu_status,
+        scan_type=scan_type,
+        scan_older_than_days=scan_older_than_days,
+        with_active_threats=with_active_threats,
+        hw_model=hw_model,
+        hw_manufacturer=hw_manufacturer,
+        cpu_model=cpu_model,
+        hw_chassis_type=hw_chassis_type,
+        ram_min_gb=ram_min_gb,
+        ram_max_gb=ram_max_gb,
+        disk_free_below=disk_free_below,
+        software_id=software_id,
+    )
+
+
+FiltersDep = Annotated[MachineFilters, Depends(machine_filters)]
 
 
 def _filtered_machines(filters: MachineFilters) -> Any:
@@ -453,6 +514,16 @@ def _filtered_machines(filters: MachineFilters) -> Any:
         stmt = stmt.where(
             col(Machine.hw_manufacturer).ilike(f"%{filters.hw_manufacturer}%")
         )
+    if filters.cpu_model:
+        # Substring like the model: "i5-8" gathers a whole generation, which is
+        # the granularity a renewal plan reasons at.
+        stmt = stmt.where(col(Machine.cpu_model).ilike(f"%{filters.cpu_model}%"))
+    if filters.hw_chassis_type:
+        # Equality: the agent normalises the kind to a short closed vocabulary
+        # (desktop, laptop…), and "desktop" as a substring of nothing else.
+        stmt = stmt.where(col(Machine.hw_chassis_type) == filters.hw_chassis_type)
+    if filters.ram_min_gb is not None or filters.ram_max_gb is not None:
+        stmt = stmt.where(ram_clause(filters.ram_min_gb, filters.ram_max_gb))
     if filters.disk_free_below is not None:
         stmt = stmt.where(low_disk_clause(filters.disk_free_below))
     if filters.software_id is not None:
@@ -496,20 +567,7 @@ def _filtered_machines(filters: MachineFilters) -> Any:
 @router.get("", response_model=MachineList)
 async def list_machines(
     session: SessionDep,
-    search: str | None = None,
-    domain: str | None = None,
-    antivirus: str | None = None,
-    os_version: str | None = None,
-    status: MachineStatus | None = None,
-    online: bool | None = None,
-    wu_status: WindowsUpdateFilter | None = None,
-    scan_type: ScanFilter | None = None,
-    scan_older_than_days: int = Query(7, ge=1),
-    with_active_threats: bool | None = None,
-    hw_model: str | None = None,
-    hw_manufacturer: str | None = None,
-    disk_free_below: int | None = Query(None, ge=1, le=100),
-    software_id: int | None = None,
+    filters: FiltersDep,
     sort_by: MachineSortField | None = None,
     sort_desc: bool = True,
     page: int = Query(1, ge=1),
@@ -519,28 +577,12 @@ async def list_machines(
     plus the two facets the dashboard cards link to (Windows Update state and
     the presence of an active threat), a scan-freshness facet — which postes no
     quick/full scan has visited within ``scan_older_than_days`` — and the
-    inventory facets: model, manufacturer, system volume below a percentage of
-    free space, and "carries this program". Sortable on the console list's own
-    columns; the default order is freshest contact first.
+    inventory facets: model, manufacturer, processor, chassis kind, memory
+    bounds in GiB, system volume below a percentage of free space, and
+    "carries this program". Sortable on the console list's own columns; the
+    default order is freshest contact first.
     """
-    stmt = _filtered_machines(
-        MachineFilters(
-            search=search,
-            domain=domain,
-            antivirus=antivirus,
-            os_version=os_version,
-            status=status,
-            online=online,
-            wu_status=wu_status,
-            scan_type=scan_type,
-            scan_older_than_days=scan_older_than_days,
-            with_active_threats=with_active_threats,
-            hw_model=hw_model,
-            hw_manufacturer=hw_manufacturer,
-            disk_free_below=disk_free_below,
-            software_id=software_id,
-        )
-    )
+    stmt = _filtered_machines(filters)
     total = await session.scalar(select(func.count()).select_from(stmt.subquery()))
     # last_seen then id behind the requested column: ties must land on the same
     # page from one request to the next, or rows duplicate and vanish across
@@ -676,121 +718,124 @@ async def list_manufacturers(session: SessionDep) -> list[FleetValue]:
     return await _distinct_values(session, Machine.hw_manufacturer)
 
 
-# The fleet export, and deliberately not a per-machine one. A fiche is read on
-# screen; and one machine's inventory is heterogeneous — sticks, disks, volumes,
-# adapters, programs — so a CSV of it is a shape nobody can pivot. What gets
-# asked for is the parc: one row per poste, opened in Excel, sorted on whatever
-# column the meeting is about.
-@router.get("/export.csv")
-async def export_machines(
-    session: SessionDep,
-    search: str | None = None,
-    domain: str | None = None,
-    antivirus: str | None = None,
-    os_version: str | None = None,
-    status: MachineStatus | None = None,
-    online: bool | None = None,
-    wu_status: WindowsUpdateFilter | None = None,
-    scan_type: ScanFilter | None = None,
-    scan_older_than_days: int = Query(7, ge=1),
-    with_active_threats: bool | None = None,
-    hw_model: str | None = None,
-    hw_manufacturer: str | None = None,
-    disk_free_below: int | None = Query(None, ge=1, le=100),
-    software_id: int | None = None,
-) -> Response:
-    """The filtered fleet as a spreadsheet — every facet of the list, no pages.
+@router.get("/processors", response_model=list[FleetValue])
+async def list_processors(session: SessionDep) -> list[FleetValue]:
+    """Processor models present in the fleet, most widespread first.
+
+    Feeds the console's processor filter. The list is read the way the model
+    list is: the top is what the parc is made of, the bottom is the odd poste.
+    """
+    return await _distinct_values(session, Machine.cpu_model)
+
+
+@router.get("/chassis-types", response_model=list[FleetValue])
+async def list_chassis_types(session: SessionDep) -> list[FleetValue]:
+    """Chassis kinds present in the fleet (desktop, laptop…), most common first."""
+    return await _distinct_values(session, Machine.hw_chassis_type)
+
+
+class ExportColumnOut(BaseModel):
+    """One column the fleet export can produce, as the console's picker lists it."""
+
+    key: str
+    label: str
+    group: str
+    group_label: str
+    kind: str
+    default: bool
+
+
+@router.get("/export-columns", response_model=list[ExportColumnOut])
+async def list_export_columns() -> list[ExportColumnOut]:
+    """The export's column catalogue, in the order the picker shows it.
+
+    Served rather than duplicated in the console: the catalogue is what the
+    export reads, and a picker offering a column the server does not know
+    would produce a 422 at the moment the reader clicks « Exporter ».
+    """
+    return [
+        ExportColumnOut(
+            key=c.key,
+            label=c.label,
+            group=c.group,
+            group_label=machine_export.GROUP_LABELS[c.group],
+            kind=c.kind,
+            default=c.default,
+        )
+        for c in machine_export.COLUMNS
+    ]
+
+
+async def _export_rows(session: SessionDep, filters: MachineFilters) -> list[Machine]:
+    """The filtered fleet, every row, hostname order.
 
     Unpaginated on purpose: an export of the first fifty rows is not an export.
-    The filters are the same ones, and they are what bounds it — a parc is
-    thousands of rows, not millions.
+    The filters are the same ones as the list, and they are what bounds it — a
+    parc is thousands of rows, not millions.
     """
-    stmt = _filtered_machines(
-        MachineFilters(
-            search=search,
-            domain=domain,
-            antivirus=antivirus,
-            os_version=os_version,
-            status=status,
-            online=online,
-            wu_status=wu_status,
-            scan_type=scan_type,
-            scan_older_than_days=scan_older_than_days,
-            with_active_threats=with_active_threats,
-            hw_model=hw_model,
-            hw_manufacturer=hw_manufacturer,
-            disk_free_below=disk_free_below,
-            software_id=software_id,
-        )
-    ).order_by(func.lower(col(Machine.hostname)).nulls_last(), col(Machine.id))
+    stmt = _filtered_machines(filters).order_by(
+        func.lower(col(Machine.hostname)).nulls_last(), col(Machine.id)
+    )
     rows = await session.exec(stmt)
+    return list(rows.all())
+
+
+# The fleet export, and deliberately not a per-machine one. A fiche is read on
+# screen; and one machine's inventory is heterogeneous — sticks, disks, volumes,
+# adapters, programs — so a spreadsheet of it is a shape nobody can pivot. What
+# gets asked for is the parc: one row per poste, opened in Excel, sorted on
+# whatever column the meeting is about — and with the columns the meeting is
+# about, which is what ``columns`` chooses (see ``machine_export``).
+@router.get("/export.csv")
+async def export_machines_csv(
+    session: SessionDep,
+    filters: FiltersDep,
+    columns: str | None = None,
+    tz: str | None = None,
+) -> Response:
+    """The filtered fleet as CSV — every facet of the list, no pages.
+
+    ``columns`` is a comma-separated list of catalogue keys (default set when
+    absent); ``tz`` the IANA zone timestamps are written in (UTC when absent).
+    """
+    chosen = machine_export.resolve_columns(columns)
+    zone = machine_export.resolve_timezone(tz)
+    machines = await _export_rows(session, filters)
     return csv_response(
         "parc.csv",
+        [c.label for c in chosen],
         [
-            "Nom",
-            "Domaine",
-            "Adresse IP",
-            "OS",
-            "Architecture",
-            "Constructeur",
-            "Modèle",
-            "N° de série",
-            "Châssis",
-            "Processeur",
-            "Cœurs",
-            "RAM (Mio)",
-            "Disque système (Mio)",
-            "Libre (Mio)",
-            "Libre (%)",
-            "BIOS",
-            "Date BIOS",
-            "Antivirus",
-            "MAJ en attente",
-            "Inventaire du",
-            "Vu le",
-        ],
-        [
-            (
-                m.hostname,
-                m.domain,
-                m.ip_address,
-                m.os_version,
-                m.os_architecture,
-                m.hw_manufacturer,
-                m.hw_model,
-                m.hw_serial,
-                m.hw_chassis_type,
-                m.cpu_model,
-                m.cpu_cores,
-                m.ram_total_mb,
-                m.system_volume_total_mb,
-                m.system_volume_free_mb,
-                _free_percent(m),
-                m.bios_version,
-                m.bios_date.isoformat() if m.bios_date else None,
-                m.av_product_name,
-                m.wu_pending_count,
-                m.inventory_last_seen.date().isoformat()
-                if m.inventory_last_seen
-                else None,
-                m.last_seen.date().isoformat(),
-            )
-            for m in rows.all()
+            [machine_export.csv_value(c, c.read(m), zone) for c in chosen]
+            for m in machines
         ],
     )
 
 
-def _free_percent(machine: Machine) -> int | None:
-    """Free space as a whole percentage, or NULL when there is nothing to divide.
+@router.get("/export.xlsx")
+async def export_machines_xlsx(
+    session: SessionDep,
+    filters: FiltersDep,
+    columns: str | None = None,
+    tz: str | None = None,
+) -> Response:
+    """The filtered fleet as an Excel workbook, with real dates and numbers.
 
-    Rounded to an integer for the spreadsheet: "12" is what the column is read
-    for, and "12.34567901234568" is what a float would put in the cell.
+    Same facets, same column catalogue and the same ``tz`` as the CSV; the
+    difference is what lands in the cells — values Excel can sort, filter and
+    sum without a conversion step.
     """
-    total = machine.system_volume_total_mb
-    free = machine.system_volume_free_mb
-    if not total or free is None:
-        return None
-    return round(free * 100 / total)
+    chosen = machine_export.resolve_columns(columns)
+    zone = machine_export.resolve_timezone(tz)
+    machines = await _export_rows(session, filters)
+    return xlsx_response(
+        "parc.xlsx",
+        [c.label for c in chosen],
+        [
+            [machine_export.xlsx_value(c, c.read(m), zone) for c in chosen]
+            for m in machines
+        ],
+        sheet_title="Parc",
+    )
 
 
 class WakeRequest(BaseModel):

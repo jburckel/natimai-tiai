@@ -103,6 +103,52 @@ describe('machineListParamsFromQuery', () => {
   });
 });
 
+describe('machineListParamsFromQuery inventory facets', () => {
+  it('carries the hardware facets the list page writes', () => {
+    // The fiche walks the search with these; a facet dropped here would have
+    // the arrows walk a broader list than the one the reader came from.
+    const params = machineListParamsFromQuery({
+      hw_model: 'OptiPlex',
+      hw_manufacturer: 'Dell',
+      cpu_model: 'i5-8',
+      hw_chassis_type: 'laptop',
+      ram_min_gb: '8',
+      ram_max_gb: '16',
+      disk_free_below: '10',
+      software_id: '42',
+    });
+
+    expect(params).toEqual({
+      hw_model: 'OptiPlex',
+      hw_manufacturer: 'Dell',
+      cpu_model: 'i5-8',
+      hw_chassis_type: 'laptop',
+      ram_min_gb: 8,
+      ram_max_gb: 16,
+      disk_free_below: 10,
+      software_id: 42,
+    });
+  });
+
+  it('drops numbers that do not parse and kinds it does not know', () => {
+    expect(
+      machineListParamsFromQuery({
+        hw_chassis_type: 'spaceship',
+        ram_min_gb: 'lots',
+        ram_max_gb: '-3',
+        disk_free_below: '250',
+        software_id: '1.5',
+      }),
+    ).toEqual({});
+  });
+
+  it('accepts the inventory sort columns', () => {
+    expect(
+      machineListParamsFromQuery({ sort_by: 'disk_free_percent', sort_desc: 'false' }),
+    ).toEqual({ sort_by: 'disk_free_percent', sort_desc: false });
+  });
+});
+
 describe('shared page-size defaults', () => {
   it('is one of the offered options, so a rebuilt URL is always valid', () => {
     // The list writes `page_size` only when it differs from the default, and the

@@ -295,6 +295,16 @@ export interface ListMachinesParams {
   /** Hardware model, matched as a substring ("OptiPlex" gathers 7010 and 7020). */
   hw_model?: string;
   hw_manufacturer?: string;
+  /** Processor model, matched as a substring ("i5-8" gathers a generation). */
+  cpu_model?: string;
+  /** Chassis kind as the agent normalises it: desktop, laptop, tablet… (exact). */
+  hw_chassis_type?: string;
+  /**
+   * Memory bounds in whole GiB, inclusive — the *nominal* size (16 for a poste
+   * Windows reports as 16 289 Mio), rounded up server-side.
+   */
+  ram_min_gb?: number;
+  ram_max_gb?: number;
   /** Only machines whose system volume is below this percentage of free space. */
   disk_free_below?: number;
   /** Only machines carrying this catalogue entry — the software drill-down. */
@@ -364,15 +374,65 @@ export async function listManufacturers(): Promise<FleetValue[]> {
   return data;
 }
 
+/** Processor models present in the fleet, most widespread first. */
+export async function listProcessors(): Promise<FleetValue[]> {
+  const { data } = await api.get<FleetValue[]>('/machines/processors');
+  return data;
+}
+
+/** Chassis kinds present in the fleet (desktop, laptop…), most common first. */
+export async function listChassisTypes(): Promise<FleetValue[]> {
+  const { data } = await api.get<FleetValue[]>('/machines/chassis-types');
+  return data;
+}
+
+/** One column the fleet export can produce, as the server's catalogue lists it. */
+export interface ExportColumn {
+  key: string;
+  label: string;
+  /** identity / antivirus / windows_update / hardware — the picker's sections. */
+  group: string;
+  group_label: string;
+  kind: string;
+  /** Part of the set exported when the reader picks nothing. */
+  default: boolean;
+}
+
 /**
- * The filtered fleet as a spreadsheet.
+ * The export's column catalogue, in the order the picker shows it. Served
+ * rather than hardcoded: the catalogue is what the export reads, and a picker
+ * offering a column the server does not know would fail at the click.
+ */
+export async function listExportColumns(): Promise<ExportColumn[]> {
+  const { data } = await api.get<ExportColumn[]>('/machines/export-columns');
+  return data;
+}
+
+export type ExportFormat = 'xlsx' | 'csv';
+
+export interface ExportOptions {
+  format: ExportFormat;
+  /** Catalogue keys, in the order the columns should appear; empty = defaults. */
+  columns?: string[];
+  /** IANA zone the timestamps are written in; omitted = UTC. */
+  tz?: string;
+}
+
+/**
+ * The filtered fleet as a spreadsheet — Excel or CSV, with chosen columns.
  *
  * Fetched as a blob and handed to the browser rather than linked to: the API
  * needs the Authorization header, which a plain `<a href>` would not carry.
  */
-export async function exportMachinesCsv(params: ListMachinesParams = {}): Promise<Blob> {
-  const { data } = await api.get<Blob>('/machines/export.csv', {
-    params,
+export async function exportMachines(
+  params: ListMachinesParams,
+  options: ExportOptions,
+): Promise<Blob> {
+  const query: Record<string, unknown> = { ...params };
+  if (options.columns?.length) query.columns = options.columns.join(',');
+  if (options.tz) query.tz = options.tz;
+  const { data } = await api.get<Blob>(`/machines/export.${options.format}`, {
+    params: query,
     responseType: 'blob',
   });
   return data;
