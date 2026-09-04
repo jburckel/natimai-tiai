@@ -13,6 +13,25 @@ export interface InfoRow {
   value: string | number;
 }
 
+/**
+ * The tabs of the machine detail page. Named after what each answers rather
+ * than after the cards it holds: « Antivirus » and not « Defender », because
+ * on a poste running ESET the Defender card is the smaller half of the tab.
+ */
+export type MachineTab =
+  'identity' | 'antivirus' | 'windows_update' | 'hardware' | 'software' | 'commands';
+
+export const MACHINE_TABS: readonly MachineTab[] = [
+  'identity',
+  'antivirus',
+  'windows_update',
+  'hardware',
+  'software',
+  'commands',
+];
+
+export const DEFAULT_MACHINE_TAB: MachineTab = 'identity';
+
 /** Server-side pagination state, as QTable holds it. */
 export interface TablePagination {
   page: number;

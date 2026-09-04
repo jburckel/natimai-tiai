@@ -11,8 +11,31 @@
       </q-btn>
     </div>
 
+    <!-- Two rows, two readings. The first is the size of the parc — what it
+         is — and the second is what needs doing about it: every card there is
+         a list an administrator opens and acts on. -->
+    <div class="row q-col-gutter-md q-mb-md">
+      <div v-for="kpi in inventoryKpis" :key="kpi.label" class="col-12 col-sm-6">
+        <q-card
+          v-ripple
+          flat
+          bordered
+          class="cursor-pointer relative-position full-height"
+          @click="go(kpi.to)"
+        >
+          <q-card-section class="row items-center no-wrap">
+            <q-icon :name="kpi.icon" :color="kpi.color" size="36px" class="q-mr-md" />
+            <div>
+              <div class="text-h4">{{ kpi.value }}</div>
+              <div class="text-caption text-grey">{{ kpi.label }}</div>
+            </div>
+          </q-card-section>
+        </q-card>
+      </div>
+    </div>
+
     <div class="row q-col-gutter-md q-mb-lg">
-      <div v-for="kpi in kpis" :key="kpi.label" class="col-6 col-sm-4 col-md-2">
+      <div v-for="kpi in alertKpis" :key="kpi.label" class="col-6 col-sm-4 col-md-2">
         <q-card
           v-ripple
           flat
@@ -129,10 +152,10 @@ interface Kpi {
   caption?: string;
 }
 
-const kpis = computed<Kpi[]>(() => {
+/** The parc itself: how many postes, how many distinct programs on them. */
+const inventoryKpis = computed<Kpi[]>(() => {
   const s = stats.value;
   if (!s) return [];
-  const reboot = s.machines_reboot_required;
   return [
     {
       label: 'Postes',
@@ -141,6 +164,27 @@ const kpis = computed<Kpi[]>(() => {
       color: 'primary',
       to: { name: 'machines' },
     },
+    {
+      label: 'Logiciels',
+      value: s.software_count,
+      icon: 'inventory_2',
+      color: 'primary',
+      to: { name: 'software' },
+    },
+  ];
+});
+
+/**
+ * What needs doing. Each card is a list an administrator can open and act on,
+ * which is the only reason a KPI earns a card here — the encryption and
+ * hardware-age counts the API still serves have no such list behind them yet,
+ * and a figure nobody can act on is noise on a wall screen.
+ */
+const alertKpis = computed<Kpi[]>(() => {
+  const s = stats.value;
+  if (!s) return [];
+  const reboot = s.machines_reboot_required;
+  return [
     {
       label: 'Base antivirus périmée',
       value: s.outdated,
@@ -179,8 +223,6 @@ const kpis = computed<Kpi[]>(() => {
       color: 'grey',
       to: { name: 'machines', query: { status: 'inactive' } },
     },
-    // --- Inventory. Each of these is a list an administrator can open and do
-    // something about, which is the only reason a KPI earns a card.
     {
       // The most actionable figure the inventory produces, and it belongs beside
       // the Windows Update card rather than in a section of its own: below
@@ -195,31 +237,6 @@ const kpis = computed<Kpi[]>(() => {
         query: { disk_free_below: String(s.low_disk_free_percent) },
       },
       caption: `moins de ${s.low_disk_free_percent} % libres`,
-    },
-    {
-      label: 'Sans chiffrement',
-      value: s.machines_unencrypted,
-      icon: 'lock_open',
-      color: 'warning',
-      // No filter behind this one yet: the card counts an EXISTS over the volume
-      // rows, and a list filter would want its own index. The figure is what a
-      // RSSI asks for; the postes behind it are a follow-up.
-      to: { name: 'machines' },
-    },
-    {
-      label: 'À renouveler',
-      value: s.machines_aging,
-      icon: 'update_disabled',
-      color: 'grey',
-      to: { name: 'machines' },
-      caption: `BIOS de plus de ${s.hardware_aging_years} ans`,
-    },
-    {
-      label: 'Logiciels',
-      value: s.software_count,
-      icon: 'inventory_2',
-      color: 'primary',
-      to: { name: 'software' },
     },
   ];
 });

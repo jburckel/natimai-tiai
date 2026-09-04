@@ -43,7 +43,7 @@ L'override publie le backend en HTTP direct sur `0.0.0.0:8800` (Caddy
 court-circuité), bascule Caddy en `tls internal` et force `ENVIRONMENT=local`,
 ce qui neutralise la garde de démarrage qui refuse les secrets `changeme`.
 
-Côté poste, récupérer `tiai-agent-<version>-windows-amd64.exe` depuis la page
+Côté poste, récupérer `tiai-agent-windows-amd64.exe` depuis la page
 *Releases* du dépôt (ou le compiler : `go build -o tiai-agent.exe .` dans
 `agent/`), puis le pointer directement sur le port HTTP — **pas** sur Caddy :
 
@@ -503,7 +503,7 @@ ré-enrôlement.
 
 ```powershell
 .\tiai-agent.exe stop
-Copy-Item .\tiai-agent-<version>-windows-amd64.exe 'C:\Program Files\Tiai\tiai-agent.exe' -Force
+Copy-Item .\tiai-agent-windows-amd64.exe 'C:\Program Files\Tiai\tiai-agent.exe' -Force
 .\tiai-agent.exe start
 ```
 

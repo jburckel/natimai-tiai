@@ -53,7 +53,30 @@ export const MACHINE_SORT_FIELDS: readonly string[] = [
   'wu_pending_count',
   'session_user_present',
   'last_seen',
+  'hw_model',
+  'ram_total_mb',
+  'disk_free_percent',
 ];
+
+/**
+ * Chassis kinds the agent normalises to, with the words the console uses for
+ * them. A closed list, so the filter is a dropdown and the URL round-trips.
+ */
+export const CHASSIS_TYPES: readonly { value: string; label: string }[] = [
+  { value: 'desktop', label: 'Poste fixe' },
+  { value: 'laptop', label: 'Portable' },
+  { value: 'tablet', label: 'Tablette' },
+  { value: 'all-in-one', label: 'Tout-en-un' },
+  { value: 'server', label: 'Serveur' },
+];
+
+/** A positive integer from a route-query value, or null. */
+export function queryInt(v: unknown): number | null {
+  const raw = queryValue(v);
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
 
 /** First scalar of a route-query value, or null (drops arrays' extra values). */
 export function queryValue(v: unknown): string | null {
@@ -93,6 +116,26 @@ export function machineListParamsFromQuery(q: LocationQuery): ListMachinesParams
   }
   if (queryValue(q.with_active_threats) === 'true') params.with_active_threats = true;
   if (queryValue(q.online) === 'true') params.online = true;
+  // Inventory facets. Text ones travel as-is (the server matches substrings);
+  // the numeric ones must parse, or they are dropped like an unknown status.
+  const model = queryValue(q.hw_model);
+  if (model) params.hw_model = model;
+  const manufacturer = queryValue(q.hw_manufacturer);
+  if (manufacturer) params.hw_manufacturer = manufacturer;
+  const cpu = queryValue(q.cpu_model);
+  if (cpu) params.cpu_model = cpu;
+  const chassis = queryValue(q.hw_chassis_type);
+  if (chassis && CHASSIS_TYPES.some((c) => c.value === chassis)) {
+    params.hw_chassis_type = chassis;
+  }
+  const ramMin = queryInt(q.ram_min_gb);
+  if (ramMin !== null) params.ram_min_gb = ramMin;
+  const ramMax = queryInt(q.ram_max_gb);
+  if (ramMax !== null) params.ram_max_gb = ramMax;
+  const diskBelow = queryInt(q.disk_free_below);
+  if (diskBelow !== null && diskBelow <= 100) params.disk_free_below = diskBelow;
+  const software = queryInt(q.software_id);
+  if (software !== null) params.software_id = software;
   const sort = queryValue(q.sort_by);
   if (sort && MACHINE_SORT_FIELDS.includes(sort)) {
     params.sort_by = sort as MachineSortField;

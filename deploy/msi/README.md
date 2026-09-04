@@ -1,9 +1,11 @@
 # Installateur MSI de l'agent
 
 Chaque release publie, à côté des `.exe` nus, un installateur
-`tiai-agent-<version>-windows-<arch>.msi` (x64 et arm64), construit par le job
+`tiai-agent-windows-<arch>.msi` (`amd64` et `arm64`), construit par le job
 `msi` de [release.yml](../../.github/workflows/release.yml) à partir de
-[Package.wxs](Package.wxs) (WiX v4+). Il ouvre le déploiement par **GPO
+[Package.wxs](Package.wxs) (WiX v4+). Le nom ne porte pas la version : elle est
+dans le tag de la release et dans le paquet lui-même (« Applications
+installées » l'affiche). Il ouvre le déploiement par **GPO
 Software Installation** — impossible avec un `.exe` nu — et sert aussi
 d'installation manuelle propre (visible dans « Applications installées »,
 mise à jour et désinstallation standard).
@@ -43,12 +45,12 @@ défaut ou ce que la GPO a déjà posé dans le registre.
 
 ```powershell
 # Installation silencieuse avec configuration
-msiexec /i tiai-agent-0.3.0-windows-amd64.msi /qn `
+msiexec /i tiai-agent-windows-amd64.msi /qn `
     APIBASEURL=https://tiai.natimai.local `
     ENROLLMENTSECRET=<secret>
 
 # Diagnostic : journal détaillé
-msiexec /i tiai-agent-0.3.0-windows-amd64.msi /qn /l*v install.log APIBASEURL=...
+msiexec /i tiai-agent-windows-amd64.msi /qn /l*v install.log APIBASEURL=...
 ```
 
 Sans `APIBASEURL` (ni valeur registre préexistante), l'installation réussit
@@ -88,11 +90,11 @@ l'ancien) — ou préférer le script de démarrage, qui met à jour tout seul.
 ## Construire en local
 
 ```powershell
-# Compile l'agent (Go requis) puis produit dist/tiai-agent-<version>-windows-amd64.msi
+# Compile l'agent (Go requis) puis produit dist/tiai-agent-windows-amd64.msi
 .\deploy\msi\build.ps1 -Version 0.3.0
 
 # À partir d'un binaire déjà compilé, pour arm64
-.\deploy\msi\build.ps1 -Version 0.3.0 -Arch arm64 -AgentExe .\dist\tiai-agent-0.3.0-windows-arm64.exe
+.\deploy\msi\build.ps1 -Version 0.3.0 -Arch arm64 -AgentExe .\dist\tiai-agent-windows-arm64.exe
 ```
 
 Le script installe l'outil [`wix`](https://wixtoolset.org) (dotnet tool global)
@@ -103,5 +105,4 @@ depuis août 2026, sinon toute commande `wix` échoue avec WIX7015).
 
 Note versions : Windows Installer n'accepte qu'une version numérique `x.y.z` —
 le suffixe d'un build de dev (`0.0.0-dev.abc123`) est tronqué pour le MSI, mais
-la version complète reste dans le binaire (`tiai-agent.exe version`) et dans le
-nom du fichier.
+la version complète reste dans le binaire (`tiai-agent.exe version`).

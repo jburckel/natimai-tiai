@@ -153,34 +153,98 @@
       </template>
     </q-banner>
 
-    <div v-if="machine" class="row q-col-gutter-md">
-      <MachineIdentityCard :machine="machine" />
-      <MachineDefenderCard :machine="machine" />
-      <MachineWindowsUpdateCard :machine="machine" />
-      <MachineAntivirusCard :machine="machine" />
-      <MachineHardwareCard :machine="machine" />
-      <MachineStorageCard :machine="machine" />
-      <MachineNetworkCard :machine="machine" />
-    </div>
-
-    <MachinePendingUpdatesCard v-if="machine" :machine="machine" :loading="loading" />
-
-    <MachineSoftwareCard v-if="machine" :machine="machine" :loading="loading" />
-
-    <MachineThreatsCard
-      v-model:pagination="threatPagination"
-      :threats="threats"
-      :loading="loading"
-      @refresh="load"
+    <!-- First the state and the findings, then the detail behind them by
+         tab: the fiche used to open on eleven cards of facts and leave the
+         reader to find the one that mattered. -->
+    <MachineStatusCard
+      v-if="machine"
+      :machine="machine"
+      :active-threats="activeThreats"
+      class="q-mb-md"
+      @open-tab="tab = $event"
     />
 
-    <MachineCommandsCard
-      v-model:pagination="commandPagination"
-      :commands="commands"
-      :loading="loading"
-      @refresh="load"
-      @show-detail="showDetail"
-    />
+    <template v-if="machine">
+      <q-tabs
+        v-model="tab"
+        dense
+        no-caps
+        align="left"
+        class="text-grey"
+        active-color="primary"
+        indicator-color="primary"
+      >
+        <q-tab name="identity" icon="badge" label="Identité" />
+        <q-tab name="antivirus" icon="shield" label="Antivirus">
+          <q-badge v-if="activeThreats" color="negative" floating>{{ activeThreats }}</q-badge>
+        </q-tab>
+        <q-tab name="windows_update" icon="system_update" label="Windows Update">
+          <q-badge v-if="machine.wu_pending_count" color="orange" floating>
+            {{ machine.wu_pending_count }}
+          </q-badge>
+        </q-tab>
+        <q-tab name="hardware" icon="memory" label="Matériel" />
+        <q-tab name="software" icon="apps" label="Logiciels">
+          <q-badge v-if="machine.software.length" color="grey-7" floating>
+            {{ machine.software.length }}
+          </q-badge>
+        </q-tab>
+        <q-tab name="commands" icon="history" label="Commandes" />
+      </q-tabs>
+      <q-separator />
+
+      <q-tab-panels v-model="tab" animated class="bg-transparent">
+        <q-tab-panel name="identity" class="q-px-none">
+          <div class="row q-col-gutter-md">
+            <MachineIdentityCard :machine="machine" />
+            <MachineNetworkCard :machine="machine" />
+          </div>
+        </q-tab-panel>
+
+        <q-tab-panel name="antivirus" class="q-px-none">
+          <div class="row q-col-gutter-md">
+            <MachineDefenderCard :machine="machine" />
+            <MachineAntivirusCard :machine="machine" />
+          </div>
+          <MachineThreatsCard
+            v-model:pagination="threatPagination"
+            :threats="threats"
+            :loading="loading"
+            @refresh="load"
+          />
+        </q-tab-panel>
+
+        <q-tab-panel name="windows_update" class="q-px-none">
+          <div class="row q-col-gutter-md">
+            <MachineWindowsUpdateCard :machine="machine" />
+          </div>
+          <MachinePendingUpdatesCard :machine="machine" :loading="loading" />
+        </q-tab-panel>
+
+        <q-tab-panel name="hardware" class="q-px-none">
+          <div class="row q-col-gutter-md">
+            <MachineHardwareCard :machine="machine" />
+            <MachineStorageCard :machine="machine" />
+            <MachineMemoryCard :machine="machine" />
+            <MachineGpuCard :machine="machine" />
+          </div>
+        </q-tab-panel>
+
+        <q-tab-panel name="software" class="q-px-none">
+          <MachineSoftwareCard :machine="machine" :loading="loading" />
+        </q-tab-panel>
+
+        <q-tab-panel name="commands" class="q-px-none">
+          <MachineCommandsCard
+            v-model:pagination="commandPagination"
+            :commands="commands"
+            :loading="loading"
+            @refresh="load"
+            @show-detail="showDetail"
+          />
+        </q-tab-panel>
+      </q-tab-panels>
+    </template>
 
     <MachineMergeDialog
       v-model="mergeOpen"
@@ -196,6 +260,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useQuasar } from 'quasar';
 import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from 'src/composables/useAutoRefresh';
 import { useMachineNavigation } from 'src/composables/useMachineNavigation';
@@ -203,16 +268,26 @@ import CommandOutputDialog from 'src/components/machine/CommandOutputDialog.vue'
 import MachineAntivirusCard from 'src/components/machine/MachineAntivirusCard.vue';
 import MachineCommandsCard from 'src/components/machine/MachineCommandsCard.vue';
 import MachineDefenderCard from 'src/components/machine/MachineDefenderCard.vue';
+import MachineGpuCard from 'src/components/machine/MachineGpuCard.vue';
 import MachineHardwareCard from 'src/components/machine/MachineHardwareCard.vue';
 import MachineIdentityCard from 'src/components/machine/MachineIdentityCard.vue';
+import MachineMemoryCard from 'src/components/machine/MachineMemoryCard.vue';
 import MachineMergeDialog from 'src/components/machine/MachineMergeDialog.vue';
 import MachineNetworkCard from 'src/components/machine/MachineNetworkCard.vue';
 import MachinePendingUpdatesCard from 'src/components/machine/MachinePendingUpdatesCard.vue';
 import MachineSoftwareCard from 'src/components/machine/MachineSoftwareCard.vue';
+import MachineStatusCard from 'src/components/machine/MachineStatusCard.vue';
 import MachineStorageCard from 'src/components/machine/MachineStorageCard.vue';
 import MachineThreatsCard from 'src/components/machine/MachineThreatsCard.vue';
 import MachineWindowsUpdateCard from 'src/components/machine/MachineWindowsUpdateCard.vue';
-import { DEFAULT_PAGE_SIZE, type TablePagination } from 'src/components/machine/types';
+import {
+  DEFAULT_MACHINE_TAB,
+  DEFAULT_PAGE_SIZE,
+  MACHINE_TABS,
+  type MachineTab,
+  type TablePagination,
+} from 'src/components/machine/types';
+import { queryValue } from 'src/utils/machineQuery';
 import {
   allowReenroll,
   getDuplicates,
@@ -238,9 +313,35 @@ import { onlineColor, onlineIcon, onlineLabel, timeAgoLabel } from 'src/utils/fo
 const props = defineProps<{ id: string }>();
 const $q = useQuasar();
 const auth = useAuthStore();
+const route = useRoute();
+const router = useRouter();
 
 const machine = ref<MachineDetail | null>(null);
 const threats = ref<Threat[]>([]);
+// Counted by the server over the whole history, not read off the page of it
+// shown below: the badge and the alert must say "3" when there are three,
+// whichever page the history table is on.
+const activeThreats = ref(0);
+
+/**
+ * The open tab, kept in the URL so a link to « the Windows Update tab of this
+ * poste » is a link, and so a reload comes back where the reader was. The
+ * default tab stays out of the URL, as the list keeps its own defaults out.
+ */
+const tab = computed<MachineTab>({
+  get: () => {
+    const raw = queryValue(route.query.tab);
+    return raw && (MACHINE_TABS as readonly string[]).includes(raw)
+      ? (raw as MachineTab)
+      : DEFAULT_MACHINE_TAB;
+  },
+  set: (value) => {
+    const query = { ...route.query };
+    if (value === DEFAULT_MACHINE_TAB) delete query.tab;
+    else query.tab = value;
+    void router.replace({ query });
+  },
+});
 const commands = ref<Command[]>([]);
 const loading = ref(false);
 const mergeOpen = ref(false);
@@ -291,14 +392,17 @@ async function fetchAll() {
   const id = ++requestId;
   const tp = threatPagination.value;
   const cp = commandPagination.value;
-  const [m, t, c] = await Promise.all([
+  const [m, t, active, c] = await Promise.all([
     getMachine(props.id),
     listThreats({ machine_id: props.id, page: tp.page, page_size: tp.rowsPerPage }),
+    // One row is enough: only the total is read.
+    listThreats({ machine_id: props.id, status: 'active', page: 1, page_size: 1 }),
     listCommands({ machine_id: props.id, page: cp.page, page_size: cp.rowsPerPage }),
   ]);
   if (id !== requestId) return;
   machine.value = m;
   threats.value = t.items;
+  activeThreats.value = active.total;
   // Merged into the current value, not the snapshot: a page turned while this
   // request was in the air must not be undone by its answer.
   threatPagination.value = { ...threatPagination.value, rowsNumber: t.total };
@@ -487,6 +591,7 @@ watch(
   () => {
     machine.value = null;
     threats.value = [];
+    activeThreats.value = 0;
     commands.value = [];
     duplicates.value = [];
     threatPagination.value = { page: 1, rowsPerPage: DEFAULT_PAGE_SIZE, rowsNumber: 0 };

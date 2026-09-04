@@ -50,16 +50,8 @@
       <div v-if="lastRefreshedAt" class="text-caption text-grey col-auto">
         Actualisé à {{ lastRefreshLabel }}
       </div>
-      <q-btn
-        flat
-        dense
-        round
-        icon="download"
-        :loading="exporting"
-        class="col-auto"
-        @click="exportCsv"
-      >
-        <q-tooltip>Exporter le parc filtré en CSV</q-tooltip>
+      <q-btn flat dense round icon="download" class="col-auto" @click="exportOpen = true">
+        <q-tooltip>Exporter le parc filtré (Excel ou CSV, colonnes au choix)</q-tooltip>
       </q-btn>
       <q-btn flat round icon="refresh" :loading="loading" class="col-auto" @click="reload">
         <q-tooltip>{{ autoRefreshHint }}</q-tooltip>
@@ -67,86 +59,155 @@
     </div>
 
     <!-- The dropdowns, folded by default: each is reached for now and then, and
-         a bar wearing all of them at once buried the search. -->
+         a bar wearing all of them at once buried the search. Two rows, because
+         the questions come in two kinds: "is it protected" and "what is it". -->
     <q-slide-transition>
-      <div v-show="filtersOpen" class="row items-center q-col-gutter-sm q-mb-sm">
-        <q-select
-          v-model="antivirus"
-          :options="antivirusOptions"
-          emit-value
-          map-options
-          dense
-          outlined
-          class="col-auto"
-          style="width: 200px"
-          @update:model-value="pushQuery"
-        />
-        <q-select
-          v-model="status"
-          :options="statusOptions"
-          emit-value
-          map-options
-          dense
-          outlined
-          class="col-auto"
-          style="width: 190px"
-          @update:model-value="pushQuery"
-        />
-        <q-select
-          v-model="wu"
-          :options="wuOptions"
-          emit-value
-          map-options
-          dense
-          outlined
-          class="col-auto"
-          style="width: 210px"
-          @update:model-value="pushQuery"
-        />
-        <q-select
-          v-model="scan"
-          :options="scanOptions"
-          emit-value
-          map-options
-          dense
-          outlined
-          class="col-auto"
-          style="width: 200px"
-          @update:model-value="pushQuery"
-        />
-        <q-select
-          v-model="os"
-          :options="osOptions"
-          emit-value
-          map-options
-          dense
-          outlined
-          class="col-auto"
-          style="width: 200px"
-          @update:model-value="pushQuery"
-        />
-        <q-select
-          v-model="model"
-          :options="modelOptions"
-          emit-value
-          map-options
-          dense
-          outlined
-          class="col-auto"
-          style="width: 220px"
-          @update:model-value="pushQuery"
-        />
-        <q-select
-          v-model="diskFree"
-          :options="diskOptions"
-          emit-value
-          map-options
-          dense
-          outlined
-          class="col-auto"
-          style="width: 210px"
-          @update:model-value="pushQuery"
-        />
+      <div v-show="filtersOpen" class="q-mb-sm">
+        <div class="row items-center q-col-gutter-sm q-mb-xs">
+          <div class="col-12 col-sm-auto text-caption text-grey filter-row-label">Sécurité</div>
+          <q-select
+            v-model="antivirus"
+            :options="antivirusOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 200px"
+            @update:model-value="pushQuery"
+          />
+          <q-select
+            v-model="status"
+            :options="statusOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 190px"
+            @update:model-value="pushQuery"
+          />
+          <q-select
+            v-model="wu"
+            :options="wuOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 210px"
+            @update:model-value="pushQuery"
+          />
+          <q-select
+            v-model="scan"
+            :options="scanOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 200px"
+            @update:model-value="pushQuery"
+          />
+        </div>
+        <div class="row items-center q-col-gutter-sm">
+          <div class="col-12 col-sm-auto text-caption text-grey filter-row-label">Matériel</div>
+          <q-select
+            v-model="os"
+            :options="osOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 200px"
+            @update:model-value="pushQuery"
+          />
+          <q-select
+            v-model="manufacturer"
+            :options="manufacturerOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 190px"
+            @update:model-value="pushQuery"
+          />
+          <q-select
+            v-model="model"
+            :options="modelOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 220px"
+            @update:model-value="pushQuery"
+          />
+          <q-select
+            v-model="processor"
+            :options="processorOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 260px"
+            @update:model-value="pushQuery"
+          />
+          <q-select
+            v-model="chassis"
+            :options="chassisOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 170px"
+            @update:model-value="pushQuery"
+          />
+          <!-- Memory as a bound and a figure: "au moins 16 Gio" is how the
+               upgrade question is asked, and no closed list holds every parc's
+               sizes. The filter applies once both halves are set. -->
+          <q-select
+            v-model="ramOp"
+            :options="ramOpOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 180px"
+            @update:model-value="pushQuery"
+          />
+          <q-input
+            v-model="ramGb"
+            type="number"
+            min="1"
+            step="1"
+            dense
+            outlined
+            debounce="400"
+            suffix="Gio"
+            placeholder="16"
+            class="col-auto"
+            style="width: 100px"
+            :disable="!ramOp"
+            @update:model-value="pushQuery"
+          />
+          <q-select
+            v-model="diskFree"
+            :options="diskOptions"
+            emit-value
+            map-options
+            dense
+            outlined
+            class="col-auto"
+            style="width: 210px"
+            @update:model-value="pushQuery"
+          />
+        </div>
       </div>
     </q-slide-transition>
 
@@ -299,6 +360,12 @@
         <q-td :props="props">{{ formatDateTime(props.value) }}</q-td>
       </template>
     </q-table>
+
+    <MachineExportDialog
+      v-model="exportOpen"
+      :params="filterParams"
+      :count="pagination.rowsNumber"
+    />
   </q-page>
 </template>
 
@@ -307,14 +374,18 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useQuasar, type QTableColumn } from 'quasar';
 import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from 'src/composables/useAutoRefresh';
+import MachineExportDialog from 'src/components/machine/MachineExportDialog.vue';
 import {
-  exportMachinesCsv,
   listAntivirusProducts,
+  listChassisTypes,
   listMachines,
+  listManufacturers,
   listModels,
   listOsVersions,
+  listProcessors,
   wakeMachines,
   wakeNotification,
+  type FleetValue,
   type ListMachinesParams,
   type Machine,
   type MachineSortField,
@@ -330,19 +401,20 @@ import {
 } from 'src/services/commands';
 import { apiErrorMessage } from 'src/services/errors';
 import {
+  CHASSIS_TYPES,
   DEFAULT_PAGE_SIZE,
   MACHINE_STATUSES,
   PAGE_SIZE_OPTIONS,
   SCAN_AGE_DAYS,
   SCAN_FILTERS,
   WU_FILTERS,
+  queryInt,
   queryValue,
 } from 'src/utils/machineQuery';
 import {
   antivirusLabel,
   antivirusStatusLabel,
   diskColor,
-  downloadBlob,
   formatDateTime,
   freePercent,
   onlineColor,
@@ -379,6 +451,23 @@ const onlineOnly = ref(false);
 // Inventory facets. `model` is a substring like the antivirus one — "OptiPlex"
 // has to gather the 7010 and the 7020, which is how a parc is reasoned about.
 const model = ref<string | null>(null);
+const manufacturer = ref<string | null>(null);
+const processor = ref<string | null>(null);
+const chassis = ref<string | null>(null);
+// Memory in two halves — a bound and a figure in GiB — because "au moins 16"
+// is how the upgrade question is asked. Only counts once both are set.
+const ramOp = ref<'min' | 'max' | null>(null);
+// A string as often as a number: QInput hands back what was typed, whatever
+// the `type`, and the URL hands back a parsed integer. `ramGbValue` is the
+// one reading the filter uses.
+const ramGb = ref<number | string | null>(null);
+
+/** The typed figure as a positive whole number of GiB, or null. */
+const ramGbValue = computed<number | null>(() => {
+  if (ramGb.value === null || ramGb.value === '') return null;
+  const n = Number(ramGb.value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+});
 // A *percentage* of free space and not a size: 40 Go left on a 4 To disk and on
 // a 128 Go SSD are not the same news.
 const diskFree = ref<number | null>(null);
@@ -464,13 +553,49 @@ const modelOptions = ref<{ label: string; value: string | null }[]>([
   { label: 'Tous les modèles', value: null },
 ]);
 
+const manufacturerOptions = ref<{ label: string; value: string | null }[]>([
+  { label: 'Tous les constructeurs', value: null },
+]);
+
+const processorOptions = ref<{ label: string; value: string | null }[]>([
+  { label: 'Tous les processeurs', value: null },
+]);
+
+// The kinds are a closed list the agent normalises to, so the entries are
+// known in advance; the fleet only says which of them are present, and how
+// many of each.
+const chassisOptions = ref<{ label: string; value: string | null }[]>([
+  { label: 'Tous les types de poste', value: null },
+]);
+
+const ramOpOptions: { label: string; value: 'min' | 'max' | null }[] = [
+  { label: 'Mémoire : toutes', value: null },
+  { label: 'Mémoire : au moins', value: 'min' },
+  { label: 'Mémoire : au plus', value: 'max' },
+];
+
 const diskOptions = [
   { label: 'Espace disque : tous', value: null },
   { label: 'Moins de 10 % libres', value: 10 },
   { label: 'Moins de 20 % libres', value: 20 },
 ];
 
-type FilterKey = 'antivirus' | 'status' | 'wu' | 'scan' | 'os' | 'model' | 'disk' | 'software';
+type FilterKey =
+  | 'antivirus'
+  | 'status'
+  | 'wu'
+  | 'scan'
+  | 'os'
+  | 'manufacturer'
+  | 'model'
+  | 'processor'
+  | 'chassis'
+  | 'ram'
+  | 'disk'
+  | 'software';
+
+/** Whether the memory filter is complete enough to apply. */
+const ramActive = computed(() => ramOp.value !== null && ramGbValue.value !== null);
 
 /** The folded filters currently narrowing the list, as chip labels. The label
  * is looked up in the dropdown's own options, so a chip always reads exactly
@@ -485,7 +610,24 @@ const filterChips = computed<{ key: FilterKey; label: string }[]>(() => {
   if (wu.value) chips.push({ key: 'wu', label: label(wuOptions, wu.value) });
   if (scan.value) chips.push({ key: 'scan', label: label(scanOptions, scan.value) });
   if (os.value) chips.push({ key: 'os', label: label(osOptions.value, os.value) });
+  if (manufacturer.value) {
+    chips.push({
+      key: 'manufacturer',
+      label: label(manufacturerOptions.value, manufacturer.value),
+    });
+  }
   if (model.value) chips.push({ key: 'model', label: label(modelOptions.value, model.value) });
+  if (processor.value) {
+    chips.push({ key: 'processor', label: label(processorOptions.value, processor.value) });
+  }
+  if (chassis.value)
+    chips.push({ key: 'chassis', label: label(chassisOptions.value, chassis.value) });
+  if (ramActive.value) {
+    chips.push({
+      key: 'ram',
+      label: `Mémoire ${ramOp.value === 'min' ? '≥' : '≤'} ${ramGbValue.value} Gio`,
+    });
+  }
   if (diskFree.value != null) {
     chips.push({
       key: 'disk',
@@ -501,8 +643,25 @@ const filterChips = computed<{ key: FilterKey; label: string }[]>(() => {
 });
 
 function clearFilter(key: FilterKey) {
-  const refs = { antivirus, status, wu, scan, os, model, disk: diskFree, software: softwareId };
-  refs[key].value = null;
+  if (key === 'ram') {
+    ramOp.value = null;
+    ramGb.value = null;
+  } else {
+    const refs = {
+      antivirus,
+      status,
+      wu,
+      scan,
+      os,
+      manufacturer,
+      model,
+      processor,
+      chassis,
+      disk: diskFree,
+      software: softwareId,
+    };
+    refs[key].value = null;
+  }
   pushQuery();
 }
 
@@ -620,6 +779,24 @@ function applyQuery() {
   threatsOnly.value = queryValue(q.with_active_threats) === 'true';
   onlineOnly.value = queryValue(q.online) === 'true';
   model.value = queryValue(q.hw_model);
+  manufacturer.value = queryValue(q.hw_manufacturer);
+  processor.value = queryValue(q.cpu_model);
+  const kind = queryValue(q.hw_chassis_type);
+  chassis.value = kind && CHASSIS_TYPES.some((c) => c.value === kind) ? kind : null;
+  // One bound at a time on screen: a URL carrying both keeps the lower one,
+  // which is the upgrade question and the more common of the two.
+  const ramMin = queryInt(q.ram_min_gb);
+  const ramMax = queryInt(q.ram_max_gb);
+  if (ramMin !== null) {
+    ramOp.value = 'min';
+    ramGb.value = ramMin;
+  } else if (ramMax !== null) {
+    ramOp.value = 'max';
+    ramGb.value = ramMax;
+  } else {
+    ramOp.value = null;
+    ramGb.value = null;
+  }
   const below = Number(queryValue(q.disk_free_below));
   diskFree.value = diskOptions.some((o) => o.value === below) ? below : null;
   const software = Number(queryValue(q.software_id));
@@ -658,6 +835,12 @@ function buildQuery(): Record<string, string> {
   if (threatsOnly.value) query.with_active_threats = 'true';
   if (onlineOnly.value) query.online = 'true';
   if (model.value) query.hw_model = model.value;
+  if (manufacturer.value) query.hw_manufacturer = manufacturer.value;
+  if (processor.value) query.cpu_model = processor.value;
+  if (chassis.value) query.hw_chassis_type = chassis.value;
+  if (ramActive.value) {
+    query[ramOp.value === 'min' ? 'ram_min_gb' : 'ram_max_gb'] = String(ramGbValue.value);
+  }
   if (diskFree.value != null) query.disk_free_below = String(diskFree.value);
   if (softwareId.value != null) query.software_id = String(softwareId.value);
   const p = pagination.value;
@@ -710,11 +893,13 @@ watch(
 // 2, and writing its own stale page number back over the user's.
 let requestId = 0;
 
-/** Fetch the current page of the current query. */
-async function fetchMachines() {
-  const id = ++requestId;
-  const p = pagination.value;
-  const params: ListMachinesParams = { page: p.page, page_size: p.rowsPerPage };
+/**
+ * The current filters as API params — every facet, no pagination and no sort.
+ * One definition for the list and the export: an export that silently ignored
+ * a facet the reader had set would be worse than no export at all.
+ */
+const filterParams = computed<ListMachinesParams>(() => {
+  const params: ListMachinesParams = {};
   if (search.value) params.search = search.value;
   if (domain.value) params.domain = domain.value;
   if (antivirus.value) params.antivirus = antivirus.value;
@@ -729,8 +914,27 @@ async function fetchMachines() {
   if (threatsOnly.value) params.with_active_threats = true;
   if (onlineOnly.value) params.online = true;
   if (model.value) params.hw_model = model.value;
+  if (manufacturer.value) params.hw_manufacturer = manufacturer.value;
+  if (processor.value) params.cpu_model = processor.value;
+  if (chassis.value) params.hw_chassis_type = chassis.value;
+  if (ramActive.value && ramGbValue.value !== null) {
+    if (ramOp.value === 'min') params.ram_min_gb = ramGbValue.value;
+    else params.ram_max_gb = ramGbValue.value;
+  }
   if (diskFree.value != null) params.disk_free_below = diskFree.value;
   if (softwareId.value != null) params.software_id = softwareId.value;
+  return params;
+});
+
+/** Fetch the current page of the current query. */
+async function fetchMachines() {
+  const id = ++requestId;
+  const p = pagination.value;
+  const params: ListMachinesParams = {
+    ...filterParams.value,
+    page: p.page,
+    page_size: p.rowsPerPage,
+  };
   const field = p.sortBy ? SORT_FIELD_BY_COLUMN[p.sortBy] : undefined;
   if (field) {
     params.sort_by = field;
@@ -810,20 +1014,32 @@ async function loadOsOptions() {
   }
 }
 
-/** Models present in the fleet, on the same reasoning as the antivirus and OS
- * dropdowns: what a parc contains is data, and the counts double as an
- * inventory the renewal plan is read off. */
-async function loadModels() {
+/**
+ * Fill one inventory dropdown from a fleet listing, on the same reasoning as
+ * the antivirus and OS ones: what a parc contains is data, and the counts
+ * double as an inventory the renewal plan is read off. A listing that failed
+ * leaves its "Tous" entry alone — the filter is still typeable in the URL.
+ */
+async function loadFleetOptions(
+  target: { value: { label: string; value: string | null }[] },
+  fetch: () => Promise<FleetValue[]>,
+  labelOf: (name: string) => string = (name) => name,
+) {
   try {
-    const models = await listModels();
-    modelOptions.value = [
-      { label: 'Tous les modèles', value: null },
-      ...models.map((m) => ({ label: `${m.name} (${m.count})`, value: m.name })),
+    const values = await fetch();
+    const all = target.value[0]!;
+    target.value = [
+      all,
+      ...values.map((v) => ({ label: `${labelOf(v.name)} (${v.count})`, value: v.name })),
     ];
   } catch {
-    // Same as above: a dropdown that could not be filled must not take the list
-    // down with it — the filter is still typeable in the URL.
+    // See above.
   }
+}
+
+/** The chassis kind in the console's words — the fleet reports the raw key. */
+function chassisLabelOf(name: string): string {
+  return CHASSIS_TYPES.find((c) => c.value === name)?.label ?? name;
 }
 
 function runBulk(action: CommandAction) {
@@ -881,49 +1097,26 @@ function usedRatio(m: Machine): number {
   return Math.min(1, Math.max(0, (total - free) / total));
 }
 
-const exporting = ref(false);
-
-/** The filtered fleet as a spreadsheet — the same facets, no pagination. */
-async function exportCsv() {
-  exporting.value = true;
-  try {
-    const blob = await exportMachinesCsv(exportParams());
-    downloadBlob(blob, 'parc.csv');
-  } catch (e) {
-    $q.notify({ type: 'negative', message: apiErrorMessage(e, "Échec de l'export") });
-  } finally {
-    exporting.value = false;
-  }
-}
-
-/** The current filters, minus the pagination: an export of the first fifty rows
- * is not an export. */
-function exportParams(): ListMachinesParams {
-  const params: ListMachinesParams = {};
-  if (search.value) params.search = search.value;
-  if (domain.value) params.domain = domain.value;
-  if (antivirus.value) params.antivirus = antivirus.value;
-  if (os.value) params.os_version = os.value;
-  if (status.value) params.status = status.value;
-  if (wu.value) params.wu_status = wu.value;
-  if (scan.value) {
-    const [scanType, scanDays] = scan.value.split(':');
-    params.scan_type = scanType as ScanFilter;
-    params.scan_older_than_days = Number(scanDays);
-  }
-  if (threatsOnly.value) params.with_active_threats = true;
-  if (onlineOnly.value) params.online = true;
-  if (model.value) params.hw_model = model.value;
-  if (diskFree.value != null) params.disk_free_below = diskFree.value;
-  if (softwareId.value != null) params.software_id = softwareId.value;
-  return params;
-}
+// The export dialog: the filtered fleet, columns at the reader's choice. It
+// reads `filterParams` live, so opening it after a filter change exports what
+// the table shows.
+const exportOpen = ref(false);
 
 onMounted(() => {
   applyQuery();
   void reload();
   void loadAntivirusOptions();
   void loadOsOptions();
-  void loadModels();
+  void loadFleetOptions(modelOptions, listModels);
+  void loadFleetOptions(manufacturerOptions, listManufacturers);
+  void loadFleetOptions(processorOptions, listProcessors);
+  void loadFleetOptions(chassisOptions, listChassisTypes, chassisLabelOf);
 });
 </script>
+
+<style scoped>
+/* The row captions line up with the dropdowns without taking a column. */
+.filter-row-label {
+  min-width: 64px;
+}
+</style>

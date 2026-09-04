@@ -7,14 +7,17 @@ vi.mock('boot/axios', () => ({
 
 import { api } from 'boot/axios';
 import {
-  exportMachinesCsv,
+  exportMachines,
   getDuplicates,
   getMachine,
   listAntivirusProducts,
+  listChassisTypes,
+  listExportColumns,
   listMachines,
   listManufacturers,
   listModels,
   listOsVersions,
+  listProcessors,
   mergeMachines,
   allowReenroll,
   revokeToken,
@@ -332,24 +335,93 @@ describe('inventory fleet listings', () => {
   });
 });
 
-describe('exportMachinesCsv', () => {
+describe('exportMachines', () => {
   beforeEach(() => {
     vi.mocked(api.get).mockReset();
   });
 
   // The export carries the same facets as the list: an export that silently
   // ignored half the filters the reader had set would be worse than none.
-  it('asks for a blob and forwards every filter', async () => {
+  it('asks for a CSV blob and forwards every filter', async () => {
     const blob = new Blob(['x']);
     vi.mocked(api.get).mockResolvedValue({ data: blob });
 
-    const result = await exportMachinesCsv({ hw_model: 'OptiPlex', disk_free_below: 10 });
+    const result = await exportMachines(
+      { hw_model: 'OptiPlex', disk_free_below: 10 },
+      { format: 'csv' },
+    );
 
     expect(api.get).toHaveBeenCalledWith('/machines/export.csv', {
       params: { hw_model: 'OptiPlex', disk_free_below: 10 },
       responseType: 'blob',
     });
     expect(result).toBe(blob);
+  });
+
+  it('asks for a workbook with the chosen columns, in order, and the reader’s zone', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: new Blob() });
+
+    await exportMachines(
+      { online: true },
+      { format: 'xlsx', columns: ['cpu_model', 'hostname'], tz: 'Pacific/Tahiti' },
+    );
+
+    expect(api.get).toHaveBeenCalledWith('/machines/export.xlsx', {
+      params: { online: true, columns: 'cpu_model,hostname', tz: 'Pacific/Tahiti' },
+      responseType: 'blob',
+    });
+  });
+
+  it('sends no columns parameter when none are chosen — the server’s defaults apply', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: new Blob() });
+
+    await exportMachines({}, { format: 'xlsx', columns: [] });
+
+    expect(api.get).toHaveBeenCalledWith('/machines/export.xlsx', {
+      params: {},
+      responseType: 'blob',
+    });
+  });
+});
+
+describe('listExportColumns', () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+  });
+
+  it('reads the catalogue from the server', async () => {
+    const columns = [
+      {
+        key: 'hostname',
+        label: 'Nom',
+        group: 'identity',
+        group_label: 'Identité',
+        kind: 'text',
+        default: true,
+      },
+    ];
+    vi.mocked(api.get).mockResolvedValue({ data: columns });
+
+    const result = await listExportColumns();
+
+    expect(api.get).toHaveBeenCalledWith('/machines/export-columns');
+    expect(result).toEqual(columns);
+  });
+});
+
+describe('processor and chassis listings', () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+  });
+
+  it('read the two fleet listings behind the new filters', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [{ name: 'x', count: 1 }] });
+
+    await listProcessors();
+    await listChassisTypes();
+
+    expect(api.get).toHaveBeenCalledWith('/machines/processors');
+    expect(api.get).toHaveBeenCalledWith('/machines/chassis-types');
   });
 });
 
