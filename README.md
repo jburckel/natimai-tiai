@@ -60,9 +60,12 @@ gère naturellement les postes éteints.
   installés, lus dans le registre comme « Applications et fonctionnalités » —
   jamais via `Win32_Product`, dont l'énumération déclenche une vérification MSI
   de chaque paquet sur chaque poste. Un catalogue à l'échelle du parc répond à
-  « qui a encore Java 8 » en un clic, et deux exports CSV alimentent le tableur
-  de la prochaine réunion. Collecté une fois par jour, et **envoyé seulement
-  quand quelque chose a changé**.
+  « qui a encore Java 8 » en un clic. La liste des postes se filtre par
+  constructeur, modèle, processeur, type de poste et quantité de mémoire, et
+  s'exporte en **Excel** ou en CSV avec les colonnes de son choix — un jeu par
+  défaut, et tout le reste de la fiche à ajouter ou retirer, à la manière d'un
+  export Odoo. Collecté une fois par jour, et **envoyé seulement quand quelque
+  chose a changé**.
 - **Déploiement sans friction** — un binaire unique poussé par GPO,
   auto-enrôlement des postes, HTTPS de bout en bout.
 
@@ -106,19 +109,29 @@ l'exécution est figée dans le binaire de l'agent.
 
 ## Téléchargement
 
-Chaque release publie l'agent Windows en `.exe` nu (déploiement par
-[script de démarrage GPO](deploy/gpo/README.md)) et en installateur `.msi`
-(GPO *Software Installation* ou pose manuelle — voir
-[deploy/msi/](deploy/msi/README.md)). Liens directs vers la dernière version :
+Chaque release publie **quatre fichiers, toujours nommés pareil**, plus leurs
+empreintes. La version est dans le tag de la release, dans le binaire
+(`tiai-agent.exe version`) et dans le champ *Version agent* de la console.
 
-| | x64 | ARM64 |
+| | x64 (la quasi-totalité des postes) | ARM64 (Snapdragon, Surface Pro X…) |
 |---|---|---|
 | Agent `.exe` | [tiai-agent-windows-amd64.exe](https://github.com/Natimai-Solutions/natimai-tiai/releases/latest/download/tiai-agent-windows-amd64.exe) | [tiai-agent-windows-arm64.exe](https://github.com/Natimai-Solutions/natimai-tiai/releases/latest/download/tiai-agent-windows-arm64.exe) |
 | Installateur `.msi` | [tiai-agent-windows-amd64.msi](https://github.com/Natimai-Solutions/natimai-tiai/releases/latest/download/tiai-agent-windows-amd64.msi) | [tiai-agent-windows-arm64.msi](https://github.com/Natimai-Solutions/natimai-tiai/releases/latest/download/tiai-agent-windows-arm64.msi) |
 
+**Quel fichier prendre ?**
+
+- **Déploiement par script de démarrage GPO** (recommandé) : le `.exe`, voir
+  [deploy/gpo/](deploy/gpo/README.md). Le script le copie, l'enregistre en
+  service et le met à jour à chaque redémarrage.
+- **GPO *Software Installation*, ou installation à la main sur quelques
+  postes** : le `.msi`, voir [deploy/msi/](deploy/msi/README.md).
+- **x64** sauf poste ARM (processeur Snapdragon) : dans le doute, `Paramètres →
+  Système → Informations système → Type du système`.
+
 Vérifier l'empreinte téléchargée contre
-[SHA256SUMS.txt](https://github.com/Natimai-Solutions/natimai-tiai/releases/latest/download/SHA256SUMS.txt) ;
-les binaires versionnés de chaque release restent sur la page
+[SHA256SUMS.txt](https://github.com/Natimai-Solutions/natimai-tiai/releases/latest/download/SHA256SUMS.txt).
+Les liens ci-dessus pointent toujours vers la dernière version ; chaque
+version antérieure reste téléchargeable sous son tag sur la page
 [Releases](https://github.com/Natimai-Solutions/natimai-tiai/releases).
 
 ## Démarrage rapide

@@ -17,7 +17,7 @@ Déposer le binaire de la *release* et le script, par exemple dans
 `\\natimai.local\NETLOGON\Tiai\` :
 
 ```
-tiai-agent.exe            # renommé depuis tiai-agent-<version>-windows-amd64.exe
+tiai-agent.exe            # renommé depuis tiai-agent-windows-amd64.exe de la release
 Install-TiaiAgent.ps1
 enrollment-secret.txt     # optionnel, voir §3
 ```

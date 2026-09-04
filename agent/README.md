@@ -609,14 +609,16 @@ git push origin v0.2.0
 ```
 
 Le workflow joue les tests, cross-compile `windows/amd64` et `windows/arm64`,
-génère `SHA256SUMS.txt` et crée la release avec les notes issues des commits.
-Les postes téléchargent alors directement
-`tiai-agent-0.2.0-windows-amd64.exe` — c'est le fichier à déposer sur le partage
-GPO.
+construit les deux `.msi`, génère `SHA256SUMS.txt` et crée la release avec les
+notes issues des commits. Chaque release porte les mêmes cinq fichiers :
+`tiai-agent-windows-amd64.exe`, `tiai-agent-windows-arm64.exe`, les deux `.msi`
+du même nom et `SHA256SUMS.txt`. Pas de nom versionné : la version est dans le
+tag, dans le binaire (`tiai-agent.exe version`) et dans les empreintes.
+`tiai-agent-windows-amd64.exe` est le fichier à déposer sur le partage GPO.
 
 Pour un binaire de test sans publier, lancer le workflow à la main (onglet
-*Actions* → *Release* → *Run workflow*) : les `.exe` sortent en artefact de
-build, versionnés `0.0.0-dev.<sha>`.
+*Actions* → *Release* → *Run workflow*) : les fichiers sortent en artefact de
+build, la version embarquée étant `0.0.0-dev.<sha>`.
 
 **Version injectée au build.** `agent.Version` est un `var` écrasé par
 `-ldflags -X` ; le code source garde `0.1.0` comme valeur des builds locaux. Pour

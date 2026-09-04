@@ -19,6 +19,15 @@
 # construit sur un runner Windows (WiX y est pleinement supporté), et la
 # publication attend les deux pour attacher un jeu complet — binaires,
 # installateurs et empreintes — ou rien.
+#
+# Chaque release porte exactement cinq fichiers, toujours nommés pareil :
+#   tiai-agent-windows-amd64.exe   tiai-agent-windows-arm64.exe
+#   tiai-agent-windows-amd64.msi   tiai-agent-windows-arm64.msi
+#   SHA256SUMS.txt
+# Pas d'exemplaire versionné en plus : la version est dans le tag, dans le
+# binaire et dans les empreintes, et deux noms pour un même fichier ne
+# faisaient qu'embrouiller le choix. Les anciennes releases restent
+# téléchargeables depuis la page Releases, chacune sous son tag.
 name: Release
 
 on:
@@ -75,9 +84,11 @@ jobs:
       # Go cross-compile sans toolchain externe : les deux cibles en quelques
       # secondes, dans le même job (pas d'aller-retour par artefacts).
       #
-      # Chaque binaire existe sous deux noms : versionné (archivage) et fixe,
-      # car le lien `releases/latest/download/<nom>` du README ne fonctionne
-      # qu'avec un nom d'asset stable d'une version à l'autre.
+      # Un seul fichier par architecture, au nom fixe : la version est dans le
+      # tag de la release, dans le binaire (`tiai-agent.exe version`) et dans
+      # SHA256SUMS.txt — un second exemplaire au nom versionné ne faisait que
+      # doubler la liste des fichiers sans dire lequel prendre. Le nom fixe est
+      # aussi ce qui fait marcher les liens `releases/latest/download/<nom>`.
       - name: Build
         working-directory: agent
         env:
@@ -85,13 +96,11 @@ jobs:
         run: |
           mkdir -p ../dist
           for arch in amd64 arm64; do
-            echo "→ windows/${arch}"
+            echo "→ windows/${arch} (${VERSION})"
             GOOS=windows GOARCH="${arch}" CGO_ENABLED=0 go build \
               -trimpath \
               -ldflags "-s -w -X tiai/agent/internal/agent.Version=${VERSION}" \
-              -o "../dist/tiai-agent-${VERSION}-windows-${arch}.exe" .
-            cp "../dist/tiai-agent-${VERSION}-windows-${arch}.exe" \
-               "../dist/tiai-agent-windows-${arch}.exe"
+              -o "../dist/tiai-agent-windows-${arch}.exe" .
           done
 
       # Permet de vérifier l'intégrité du binaire avant déploiement GPO. Les
@@ -149,8 +158,7 @@ jobs:
           wix extension add --global "WixToolset.Util.wixext/${WIX_VERSION}"
           wix extension list --global
 
-      # Même dualité de noms que pour les .exe : versionné + fixe pour le lien
-      # `releases/latest/download/...` du README.
+      # Même règle que pour les .exe : un fichier par architecture, au nom fixe.
       - name: Build MSI
         shell: bash
         env:
@@ -158,22 +166,20 @@ jobs:
         run: |
           # Windows Installer exige une version numérique x.y.z : on tronque le
           # suffixe des builds de dev (0.0.0-dev.abc123 → 0.0.0). La version
-          # complète reste dans le binaire et dans le nom du fichier.
+          # complète reste dans le binaire embarqué.
           msi_version="${VERSION%%-*}"
           for arch in amd64 arm64; do
             case "${arch}" in
               amd64) wix_arch=x64 ;;
               *)     wix_arch="${arch}" ;;
             esac
-            echo "→ msi windows/${arch}"
+            echo "→ msi windows/${arch} (${VERSION}, MSI ${msi_version})"
             wix build deploy/msi/Package.wxs \
               -ext "WixToolset.Util.wixext/${WIX_VERSION}" \
               -arch "${wix_arch}" \
               -d ProductVersion="${msi_version}" \
-              -d AgentExe="dist/tiai-agent-${VERSION}-windows-${arch}.exe" \
-              -o "dist/tiai-agent-${VERSION}-windows-${arch}.msi"
-            cp "dist/tiai-agent-${VERSION}-windows-${arch}.msi" \
-               "dist/tiai-agent-windows-${arch}.msi"
+              -d AgentExe="dist/tiai-agent-windows-${arch}.exe" \
+              -o "dist/tiai-agent-windows-${arch}.msi"
           done
 
       - name: Artefact de build

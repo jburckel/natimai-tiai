@@ -7,7 +7,8 @@
 .DESCRIPTION
     Compile le binaire Go si aucun n'est fourni, installe l'outil `wix`
     (.NET tool) et son extension Util s'ils manquent, puis produit
-    dist/tiai-agent-<version>-windows-<arch>.msi.
+    dist/tiai-agent-windows-<arch>.msi — le même nom que la release, sans la
+    version : elle est dans le binaire et dans le paquet.
 
     Prérequis : Go (si -AgentExe absent) et le SDK .NET (pour `dotnet tool`).
 
@@ -24,7 +25,7 @@
 
 .EXAMPLE
     .\build.ps1 -Version 0.3.0
-    .\build.ps1 -Version 0.3.0 -Arch arm64 -AgentExe ..\..\dist\tiai-agent-0.3.0-windows-arm64.exe
+    .\build.ps1 -Version 0.3.0 -Arch arm64 -AgentExe ..\..\dist\tiai-agent-windows-arm64.exe
 #>
 [CmdletBinding()]
 param(
@@ -51,7 +52,7 @@ if ($msiVersion -notmatch '^\d+\.\d+\.\d+$') {
 
 # --- 1. Binaire ---------------------------------------------------------------
 if ([string]::IsNullOrWhiteSpace($AgentExe)) {
-    $AgentExe = Join-Path $OutDir "tiai-agent-$Version-windows-$Arch.exe"
+    $AgentExe = Join-Path $OutDir "tiai-agent-windows-$Arch.exe"
     Write-Host "Compilation de l'agent ($Arch) -> $AgentExe"
     Push-Location (Join-Path $repoRoot 'agent')
     try {
@@ -98,7 +99,7 @@ if (-not ((wix extension list --global) -match ([regex]::Escape("WixToolset.Util
 
 # --- 3. MSI ---------------------------------------------------------------------
 $wixArch = if ($Arch -eq 'amd64') { 'x64' } else { 'arm64' }
-$msiPath = Join-Path $OutDir "tiai-agent-$Version-windows-$Arch.msi"
+$msiPath = Join-Path $OutDir "tiai-agent-windows-$Arch.msi"
 
 wix build (Join-Path $PSScriptRoot 'Package.wxs') `
     -ext "WixToolset.Util.wixext/$wixToolVersion" `
