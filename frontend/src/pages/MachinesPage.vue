@@ -47,7 +47,7 @@
           {{ filterChips.length }}
         </q-badge>
       </q-btn>
-      <div v-if="lastRefreshedAt" class="text-caption text-grey col-auto">
+      <div v-if="lastRefreshedAt" class="text-caption text-muted col-auto">
         Actualisé à {{ lastRefreshLabel }}
       </div>
       <q-btn flat dense round icon="download" class="col-auto" @click="exportOpen = true">
@@ -64,7 +64,7 @@
     <q-slide-transition>
       <div v-show="filtersOpen" class="q-mb-sm">
         <div class="row items-center q-col-gutter-sm q-mb-xs">
-          <div class="col-12 col-sm-auto text-caption text-grey filter-row-label">Sécurité</div>
+          <div class="col-12 col-sm-auto text-caption text-muted filter-row-label">Sécurité</div>
           <q-select
             v-model="antivirus"
             :options="antivirusOptions"
@@ -111,7 +111,7 @@
           />
         </div>
         <div class="row items-center q-col-gutter-sm">
-          <div class="col-12 col-sm-auto text-caption text-grey filter-row-label">Matériel</div>
+          <div class="col-12 col-sm-auto text-caption text-muted filter-row-label">Matériel</div>
           <q-select
             v-model="os"
             :options="osOptions"
@@ -240,7 +240,7 @@
     </div>
 
     <div v-if="selected.length" class="row items-center q-mb-sm">
-      <div class="text-caption text-grey q-mr-md">{{ selected.length }} sélectionné(s)</div>
+      <div class="text-caption text-muted q-mr-md">{{ selected.length }} sélectionné(s)</div>
       <q-btn-dropdown color="primary" dense label="Action groupée" icon="bolt">
         <q-list>
           <template v-for="section in actionGroups" :key="section.group">
@@ -301,7 +301,7 @@
       </template>
       <template #body-cell-agent="props">
         <q-td :props="props">
-          <span :class="{ 'text-grey': !props.value }">{{ props.value ?? '—' }}</span>
+          <span :class="{ 'text-muted': !props.value }">{{ props.value ?? '—' }}</span>
           <q-icon
             v-if="isAgentOutdated(props.value, agentLatest)"
             name="system_update_alt"
@@ -362,7 +362,7 @@
               rounded
               style="width: 90px"
             />
-            <div class="text-caption text-grey">
+            <div class="text-caption text-muted">
               {{ sizeLabel(props.row.system_volume_free_mb) }} libres
             </div>
             <q-tooltip>
@@ -370,7 +370,7 @@
               {{ sizeLabel(props.row.system_volume_total_mb) }}
             </q-tooltip>
           </template>
-          <span v-else class="text-grey">—</span>
+          <span v-else class="text-muted">—</span>
         </q-td>
       </template>
       <template #body-cell-session="props">

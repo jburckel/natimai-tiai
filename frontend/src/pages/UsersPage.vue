@@ -45,7 +45,7 @@
 
       <template #body-cell-email_preference="props">
         <q-td :props="props">
-          <span :class="props.value === 'none' ? 'text-grey' : ''">
+          <span :class="props.value === 'none' ? 'text-muted' : ''">
             {{ emailPreferenceLabel(props.value) }}
           </span>
         </q-td>
@@ -170,7 +170,7 @@
     <q-dialog v-model="resetOpen" @hide="resetResult = null">
       <q-card style="width: 460px; max-width: 90vw">
         <q-card-section class="text-h6">Réinitialiser le mot de passe</q-card-section>
-        <q-card-section class="q-pt-none text-body2 text-grey-8">
+        <q-card-section class="q-pt-none text-body2 text-muted">
           {{ resetTarget?.email }}
         </q-card-section>
 
@@ -188,7 +188,7 @@
                 :hint="`${PASSWORD_MIN_LENGTH} caractères minimum`"
                 :rules="[required, longEnough]"
               />
-              <q-banner dense class="bg-orange-1 text-orange-9">
+              <q-banner dense class="surface-orange">
                 <template #avatar><q-icon name="warning" /></template>
                 Les sessions ouvertes de ce compte seront fermées.
               </q-banner>

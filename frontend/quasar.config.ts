@@ -41,6 +41,9 @@ export default defineConfig(() => {
       // French for Quasar's own strings: table pagination, "no data", the
       // OK / Cancel of every confirmation dialog.
       lang: 'fr',
+      // Follow the operator's system theme. Every tinted background goes
+      // through a `surface-*` class (src/css/surfaces.scss) so it holds in both.
+      config: { dark: 'auto' },
       plugins: ['Notify', 'Dialog'],
     },
   };

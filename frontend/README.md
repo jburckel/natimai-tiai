@@ -27,7 +27,18 @@ src/
   router/                   routes
   services/machines.ts      appels API typés
   utils/format.ts           libellés et couleurs partagés
+  css/surfaces.scss         surfaces thémables (clair / sombre)
 ```
+
+## Thème clair et sombre
+
+La console suit le thème du système (`dark: 'auto'`). Tout aplat teinté passe
+par une classe `surface-*` de `src/css/surfaces.scss` (`surface-blue`,
+`surface-orange`, `surface-red`…), qui fixe fond et texte dans les deux modes
+à 4,5:1 au moins ; le texte secondaire par `text-muted`, une valeur mise en
+avant par `text-strong`. Jamais `bg-<teinte>-1/2/3`, `bg-white`, `text-grey*`,
+`text-black` ni ternaire `$q.dark.isActive` : le test
+`src/test/no-fixed-light-colors.spec.ts` échoue.
 
 ## Rafraîchissement automatique
 
