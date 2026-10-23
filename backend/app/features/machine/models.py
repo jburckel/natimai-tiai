@@ -183,8 +183,10 @@ class Machine(SQLModel, table=True):
     session_state: str | None = None  # active / disconnected
     session_is_remote: bool | None = None
 
-    # Per-machine auth: only the token hash is stored.
-    token_hash: str | None = None
+    # Per-machine auth: only the token hash is stored. Indexed: every agent call
+    # looks the machine up by it. Unique: two postes sharing a token would be
+    # indistinguishable (NULLs stay distinct, so un-enrolled rows are fine).
+    token_hash: str | None = Field(default=None, unique=True, index=True)
     token_revoked: bool = Field(default=False)
 
     first_seen: datetime = utc_field(default_factory=utcnow)
