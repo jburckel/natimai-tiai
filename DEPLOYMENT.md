@@ -107,7 +107,9 @@ docker compose up -d
   `deploy/.env`.
 - Hors `ENVIRONMENT=local`, le backend **refuse de démarrer** si `SECRET_KEY`,
   `ENROLLMENT_SECRET`, `POSTGRES_PASSWORD` ou `FIRST_ADMIN_PASSWORD` est vide ou
-  commence encore par `changeme`.
+  commence encore par `changeme`, ou si `SECRET_KEY` fait moins de 32 caractères
+  ou `ENROLLMENT_SECRET` moins de 16 (`openssl rand -hex 32` en produit un).
+  `ENVIRONMENT` absent vaut `production` : un `.env` qui l'oublie reste gardé.
 - Les postes du domaine font déjà confiance à l'AC racine : aucun import de
   certificat n'est nécessaire côté agent.
 
@@ -179,14 +181,14 @@ Il n'est jamais committé.
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `ENVIRONMENT` | `local` | `local` / `staging` / `production`. Hors `local` : garde anti-placeholder + masquage des erreurs 500 |
-| `SECRET_KEY` | `changeme` | Signature des JWT console |
+| `ENVIRONMENT` | `production` | `local` / `staging` / `production`. Hors `local` : garde anti-placeholder et longueur minimale des secrets + masquage des erreurs 500 |
+| `SECRET_KEY` | `changeme` | Signature des JWT console — 32 caractères minimum hors `local` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `480` | Durée de vie du JWT console |
 | `FIRST_ADMIN_EMAIL` / `FIRST_ADMIN_PASSWORD` | — | Compte admin créé au démarrage s'il n'existe pas |
 | `PASSWORD_MIN_LENGTH` | `12` | Longueur minimale imposée à tout mot de passe |
 | `PASSWORD_RESET_EXPIRE_MINUTES` | `60` | Validité d'un lien « mot de passe oublié » |
 | `CONSOLE_BASE_URL` | — | URL publique de la console, pour le lien de réinitialisation. **Sans elle, aucun e-mail de réinitialisation n'est envoyé** |
-| `ENROLLMENT_SECRET` | `changeme-enrollment-secret` | Secret partagé d'enrôlement ; n'autorise que l'enregistrement d'un poste |
+| `ENROLLMENT_SECRET` | `changeme-enrollment-secret` | Secret partagé d'enrôlement ; n'autorise que l'enregistrement d'un poste — 16 caractères minimum hors `local` |
 | `BACKEND_CORS_ORIGINS` | *(vide)* | Origines autorisées, séparées par des virgules. Inutile si la console passe par Caddy |
 | `POSTGRES_SERVER` / `POSTGRES_PORT` | `db` / `5432` | Forcés par le compose |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `tiai` / — / `tiai` | |
