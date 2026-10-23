@@ -38,6 +38,9 @@ export default defineConfig(() => {
     },
 
     framework: {
+      // French for Quasar's own strings: table pagination, "no data", the
+      // OK / Cancel of every confirmation dialog.
+      lang: 'fr',
       plugins: ['Notify', 'Dialog'],
     },
   };

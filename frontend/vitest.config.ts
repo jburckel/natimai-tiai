@@ -17,6 +17,9 @@ export default defineConfig({
     tsconfigRaw: '{}',
   },
   test: {
+    // The parc's zone, behind UTC: a date parsed as UTC midnight shows up as
+    // the day before here, where it would pass unnoticed in Paris.
+    env: { TZ: 'Pacific/Tahiti' },
     environment: 'node',
     globals: true,
     include: ['src/**/*.spec.ts'],
