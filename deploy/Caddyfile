@@ -26,8 +26,22 @@
 		-Server
 	}
 
-	# API backend
+	# Agents : un heartbeat portant l'inventaire logiciel complet (2 000
+	# entrées au plus) pèse environ 2 Mo ; 8 Mo laissent de la marge.
+	# Au-delà, Caddy répond 413 avant que le backend ne lise le corps — FastAPI
+	# le lirait en entier avant même de vérifier le token.
+	handle /api/v1/agent/* {
+		request_body {
+			max_size 8MB
+		}
+		reverse_proxy backend:8000
+	}
+
+	# API backend : la console n'envoie que des formulaires et des filtres.
 	handle /api/* {
+		request_body {
+			max_size 1MB
+		}
 		reverse_proxy backend:8000
 	}
 
