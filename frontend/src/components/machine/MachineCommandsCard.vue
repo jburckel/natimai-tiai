@@ -20,6 +20,7 @@
         <q-td :props="props">
           <q-badge :color="statusColor(props.value)">{{ statusLabel(props.value) }}</q-badge>
           <q-btn
+            aria-label="Voir le résultat"
             v-if="props.row.result_output"
             flat
             dense
@@ -33,6 +34,7 @@
             <q-tooltip>Voir le résultat</q-tooltip>
           </q-btn>
           <q-btn
+            aria-label="Voir l'erreur"
             v-if="props.row.error"
             flat
             dense

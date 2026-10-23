@@ -6,6 +6,7 @@ import {
   createWebHistory,
 } from 'vue-router';
 import routes from './routes';
+import { documentTitle } from 'src/utils/format';
 
 // Source of truth for "logged in" in the guard (kept in sync by the auth store).
 const TOKEN_KEY = 'tiai_token';
@@ -38,6 +39,12 @@ export default defineRouter(() => {
       return { name: 'dashboard' };
     }
     return true;
+  });
+
+  // One title per page: it is what a screen reader announces on navigation,
+  // and what tells twelve open tabs apart.
+  router.afterEach((to) => {
+    document.title = documentTitle(to.meta.title as string | undefined);
   });
 
   return router;

@@ -37,8 +37,25 @@ par une classe `surface-*` de `src/css/surfaces.scss` (`surface-blue`,
 `surface-orange`, `surface-red`…), qui fixe fond et texte dans les deux modes
 à 4,5:1 au moins ; le texte secondaire par `text-muted`, une valeur mise en
 avant par `text-strong`. Jamais `bg-<teinte>-1/2/3`, `bg-white`, `text-grey*`,
-`text-black` ni ternaire `$q.dark.isActive` : le test
+`text-black`, `text-orange` / `text-positive` (utiliser `text-warn` /
+`text-ok`) ni ternaire `$q.dark.isActive` : le test
 `src/test/no-fixed-light-colors.spec.ts` échoue.
+
+## Accessibilité
+
+- Un bouton icône porte un `aria-label` (un tooltip ne donne pas de nom
+  accessible) ; un `q-input` / `q-select` un `label` ou un `aria-label` (un
+  placeholder n'en est pas un).
+- Ce qui mène ailleurs est un lien (`router-link`, `:to`), jamais un
+  `@click` sur une carte ou un bloc : atteignable au clavier, ouvrable dans un
+  nouvel onglet.
+- Chaque page a un `h1` et un titre d'onglet (`meta.title` de la route).
+- Un état ne se dit pas qu'en couleur : le badge antivirus écrit « non à
+  jour ».
+- Une confirmation nomme son action sur son bouton (« Redémarrer 12 postes »),
+  en rouge quand elle peut coûter du travail.
+
+Ces règles sont vérifiées par `src/test/quasar-a11y.spec.ts`.
 
 ## Rafraîchissement automatique
 

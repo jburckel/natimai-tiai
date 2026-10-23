@@ -1,7 +1,7 @@
 <template>
   <q-page padding>
     <div class="row items-center q-mb-md">
-      <div class="text-h5">Logiciels du parc</div>
+      <h1 class="text-h5 q-my-none">Logiciels du parc</h1>
       <q-space />
       <q-btn
         flat
@@ -14,12 +14,21 @@
       >
         <q-tooltip>Télécharger le catalogue filtré au format CSV</q-tooltip>
       </q-btn>
-      <q-btn flat dense round icon="refresh" :loading="loading" @click="load" />
+      <q-btn
+        aria-label="Actualiser"
+        flat
+        dense
+        round
+        icon="refresh"
+        :loading="loading"
+        @click="load"
+      />
     </div>
 
     <q-card flat bordered>
       <q-card-section>
         <q-input
+          aria-label="Rechercher un logiciel"
           v-model="search"
           dense
           outlined

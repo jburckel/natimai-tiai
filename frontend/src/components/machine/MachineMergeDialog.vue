@@ -63,6 +63,7 @@
           confirmer&nbsp;: rien ne garantit qu'il s'agisse du même matériel.
         </div>
         <q-input
+          aria-label="Poste à fusionner"
           v-model="search"
           dense
           outlined

@@ -13,6 +13,7 @@
           <q-form @submit="onSubmit">
             <q-card-section class="q-gutter-md">
               <q-input
+                autocomplete="username"
                 v-model="email"
                 type="email"
                 label="E-mail"
@@ -22,6 +23,7 @@
                 :rules="[required]"
               />
               <q-input
+                autocomplete="current-password"
                 v-model="password"
                 type="password"
                 label="Mot de passe"

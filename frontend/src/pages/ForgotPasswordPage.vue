@@ -17,6 +17,7 @@
             <q-form @submit="onSubmit">
               <q-card-section class="q-pt-none">
                 <q-input
+                  autocomplete="email"
                   v-model="email"
                   type="email"
                   label="E-mail"
