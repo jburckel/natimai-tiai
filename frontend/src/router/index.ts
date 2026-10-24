@@ -13,16 +13,20 @@ const TOKEN_KEY = 'tiai_token';
 const ROLE_KEY = 'tiai_role';
 
 export default defineRouter(() => {
-  const createHistory = process.env.SERVER
+  // app-vite 3 exposes these as `import.meta.env.QUASAR_*`; the `process.env`
+  // spelling of app-vite 1/2 is undefined in dev (the page stayed blank) and
+  // emptied in the build, which silently fell back to hash mode — and broke the
+  // e-mailed `/reset-password?token=…` link, a history-mode URL.
+  const createHistory = import.meta.env.QUASAR_SERVER
     ? createMemoryHistory
-    : process.env.VUE_ROUTER_MODE === 'history'
+    : import.meta.env.QUASAR_VUE_ROUTER_MODE === 'history'
       ? createWebHistory
       : createWebHashHistory;
 
   const router = createRouter({
     scrollBehavior: () => ({ left: 0, top: 0 }),
     routes,
-    history: createHistory(process.env.VUE_ROUTER_BASE),
+    history: createHistory(import.meta.env.QUASAR_VUE_ROUTER_BASE),
   });
 
   router.beforeEach((to) => {
