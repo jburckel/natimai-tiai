@@ -73,7 +73,11 @@ password_reset_limiter = RateLimiter(max_attempts=5, window_seconds=900)
 # back all at once — roomy, since each poste still arrives from its own IP.
 enroll_limiter = RateLimiter(max_attempts=30, window_seconds=300)
 
-_ALL = (login_limiter, password_reset_limiter, enroll_limiter)
+# Refresh: the console renews every quarter-hour per tab; a few dozen a minute
+# is already a script, not a person.
+refresh_limiter = RateLimiter(max_attempts=60, window_seconds=60)
+
+_ALL = (login_limiter, password_reset_limiter, enroll_limiter, refresh_limiter)
 
 
 def reset_all() -> None:

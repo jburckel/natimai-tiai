@@ -3,7 +3,8 @@
 Command dispatch already audits itself — every command row carries
 ``created_by`` and its full lifecycle (command/models.py), wake included. This
 table covers the actions that leave *no* row anywhere else: the kill-switch
-and its lifting, machine merges (which delete a row), account management.
+and its lifting, held re-enrollments, machine merges (which delete a row),
+account management and account lockouts.
 Entries are written inside the caller's transaction — same rule as the e-mail
 outbox: the action and its trace commit or roll back together — and are never
 updated or deleted afterwards.
@@ -45,3 +46,6 @@ class AuditEntry(SQLModel, table=True):
     # What would otherwise be lost: the merged source's identity, the fields
     # an update touched, the hostname behind a machine id.
     details: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
+    # Where the request came from (app.core.net.client_ip): what ties an
+    # action to a workstation when the account itself is the question.
+    ip: str | None = Field(default=None, max_length=64)

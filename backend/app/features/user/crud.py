@@ -1,19 +1,37 @@
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from sqlalchemy import delete, func, or_
+from sqlalchemy import delete, func, or_, update
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core import security
 from app.core.config import settings
 from app.features.base import utcnow
-from app.features.user.models import PasswordResetToken, Role, User
+from app.features.user.models import (
+    PasswordResetToken,
+    RefreshToken,
+    Role,
+    User,
+    new_security_stamp,
+)
+
+
+def normalize_email(email: str) -> str:
+    """The stored form of an address: trimmed, lower-case.
+
+    The domain part is case-insensitive everywhere, and no mail system in this
+    product's reach treats the local part otherwise; two accounts that differ
+    only in case would be one person with two passwords.
+    """
+    return email.strip().lower()
 
 
 async def get_by_email(session: AsyncSession, email: str) -> User | None:
-    """Fetch a user by email (case-sensitive)."""
-    result = await session.exec(select(User).where(User.email == email))
+    """Fetch a user by email, whatever the case it is typed in."""
+    result = await session.exec(
+        select(User).where(func.lower(User.email) == normalize_email(email))
+    )
     return result.one_or_none()
 
 
@@ -24,28 +42,121 @@ async def create_user(
     password: str,
     role: Role = Role.READONLY,
     full_name: str | None = None,
+    commit: bool = True,
 ) -> User:
-    """Create a user with a hashed password."""
+    """Create a user with a hashed password.
+
+    ``commit=False`` leaves the transaction to the caller, which then has the
+    row flushed (its id known) and can add the audit entry that goes with it.
+    """
     user = User(
-        email=email,
+        email=normalize_email(email),
         hashed_password=security.get_password_hash(password),
         role=role.value,
         full_name=full_name,
     )
     session.add(user)
+    if not commit:
+        await session.flush()
+        return user
     await session.commit()
     await session.refresh(user)
     return user
 
 
+class AccountLockedError(Exception):
+    """The account is locked after too many failed logins."""
+
+    def __init__(self, user: User, locked_until: datetime, *, just_locked: bool):
+        super().__init__(f"account locked until {locked_until.isoformat()}")
+        self.user = user
+        self.locked_until = locked_until
+        # True on the failure that tripped the lock: the one worth auditing.
+        self.just_locked = just_locked
+
+
 async def authenticate(session: AsyncSession, email: str, password: str) -> User | None:
-    """Return the user if credentials are valid and the account is active."""
+    """Return the user if credentials are valid and the account is active.
+
+    Raises ``AccountLockedError`` while the account is locked, and on the
+    failure that locks it. Failure counters are changed on the session but not
+    committed: the caller commits, error or not.
+
+    An unknown address costs one bcrypt like a known one, so the response time
+    does not tell which addresses have an account.
+    """
     user = await get_by_email(session, email)
-    if user is None or not user.is_active:
+    if user is None:
+        security.burn_password_check(password)
         return None
+    now = utcnow()
+    if user.locked_until is not None and user.locked_until > now:
+        raise AccountLockedError(user, user.locked_until, just_locked=False)
     if not security.verify_password(password, user.hashed_password):
+        user.failed_login_attempts += 1
+        if user.failed_login_attempts >= settings.LOGIN_MAX_FAILED_ATTEMPTS:
+            user.failed_login_attempts = 0
+            user.locked_until = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
+            session.add(user)
+            raise AccountLockedError(user, user.locked_until, just_locked=True)
+        session.add(user)
         return None
+    if not user.is_active:
+        return None
+    if user.failed_login_attempts or user.locked_until is not None:
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        session.add(user)
     return user
+
+
+# --- Sessions: security stamp and refresh tokens ------------------------------
+
+
+async def end_sessions(session: AsyncSession, user: User) -> None:
+    """End every session of ``user``: new stamp, refresh tokens revoked.
+
+    For every change of what the account may do — password, role, activation,
+    address. Does not commit.
+    """
+    user.security_stamp = new_security_stamp()
+    session.add(user)
+    await session.exec(
+        update(RefreshToken)
+        .where(col(RefreshToken.user_id) == user.id)
+        .where(col(RefreshToken.revoked_at).is_(None))
+        .values(revoked_at=utcnow())
+    )
+
+
+def issue_refresh_token(session: AsyncSession, user: User, family: str) -> str:
+    """Add a refresh token to ``family`` and return its clear value (for the
+    cookie, once). Does not commit."""
+    token = security.generate_refresh_token()
+    session.add(
+        RefreshToken(
+            token_hash=security.hash_token(token),
+            user_id=user.id,
+            family=family,
+            expires_at=utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        )
+    )
+    return token
+
+
+async def get_refresh_token(session: AsyncSession, token: str) -> RefreshToken | None:
+    """The stored row behind a cookie value, if any."""
+    return await session.get(RefreshToken, security.hash_token(token))
+
+
+async def revoke_family(session: AsyncSession, family: str) -> None:
+    """Revoke every token of a login's family (logout, or a detected reuse)."""
+    await session.exec(
+        update(RefreshToken)
+        .where(col(RefreshToken.family) == family)
+        .where(col(RefreshToken.revoked_at).is_(None))
+        .values(revoked_at=utcnow())
+    )
 
 
 # --- Console user management ------------------------------------------------
@@ -88,7 +199,11 @@ async def set_password(session: AsyncSession, user: User, password: str) -> None
     user.hashed_password = security.get_password_hash(password)
     user.password_changed_at = utcnow()
     user.updated_at = utcnow()
-    session.add(user)
+    # A new password is also the way out of a lockout: the admin who resets
+    # it, or the owner who redeems a reset link, has proved more than a guess.
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    await end_sessions(session, user)
 
 
 async def delete_user(session: AsyncSession, user: User) -> None:

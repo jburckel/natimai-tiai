@@ -170,6 +170,33 @@
       </template>
     </q-banner>
 
+    <!-- The fleet secret was presented for this poste while it still had a
+         live token: a reinstall, or someone claiming its identity. Nothing was
+         issued; the decision is the administrator's, with the date and source
+         address to make it on. -->
+    <q-banner
+      v-if="machine?.reenroll_requested_at && !machine.token_revoked"
+      class="surface-orange q-mb-md"
+      rounded
+    >
+      <template #avatar><q-icon name="key" color="orange" /></template>
+      Ré-enrôlement demandé le {{ formatDateTime(machine.reenroll_requested_at) }}
+      <template v-if="machine.reenroll_requested_ip">
+        depuis {{ machine.reenroll_requested_ip }}</template
+      >, alors que ce poste a encore un token valide. Si le poste a été réinstallé, autorisez-le ;
+      sinon, quelqu'un tente de prendre sa place — n'autorisez rien et le poste garde son token.
+      <template #action>
+        <q-btn
+          v-if="auth.isAdmin"
+          flat
+          dense
+          no-caps
+          label="Autoriser le ré-enrôlement"
+          @click="confirmAllowReenroll"
+        />
+      </template>
+    </q-banner>
+
     <q-banner v-if="machine?.needs_verification" class="surface-orange q-mb-md" rounded>
       <template #avatar><q-icon name="warning" color="orange" /></template>
       Empreinte divergente : ce poste nécessite une vérification manuelle (clone, swap matériel ou
@@ -338,6 +365,7 @@ import {
 import { apiErrorMessage } from 'src/services/errors';
 import {
   documentTitle,
+  formatDateTime,
   onlineColor,
   onlineIcon,
   onlineLabel,
@@ -562,7 +590,8 @@ function confirmAllowReenroll() {
     message:
       "L'ancien token reste invalide ; le poste reviendra de lui-même à sa prochaine tentative " +
       "d'enrôlement, dans les minutes qui suivent s'il est allumé. Continuer ?",
-    cancel: true,
+    ok: { label: 'Autoriser le ré-enrôlement', unelevated: true, noCaps: true },
+    cancel: { label: 'Annuler', flat: true, noCaps: true },
     persistent: true,
   }).onOk(() => {
     void doAllowReenroll();

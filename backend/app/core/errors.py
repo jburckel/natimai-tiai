@@ -33,6 +33,10 @@ class ErrorCode(enum.StrEnum):
     AUTH_TOKEN_INVALID = "auth.token.invalid"
     AUTH_TOKEN_REVOKED = "auth.token.revoked"
     AUTH_ENROLLMENT_SECRET_INVALID = "auth.enrollment_secret.invalid"
+    AUTH_ACCOUNT_LOCKED = "auth.account.locked"
+    AUTH_REFRESH_INVALID = "auth.refresh.invalid"
+    # Lost a race with another tab's renewal: retry, the cookie is already new.
+    AUTH_REFRESH_SUPERSEDED = "auth.refresh.superseded"
     # Passwords
     PASSWORD_CURRENT_INVALID = "password.current.invalid"
     PASSWORD_RESET_TOKEN_INVALID = "password.reset_token.invalid"
@@ -40,6 +44,7 @@ class ErrorCode(enum.StrEnum):
     MACHINE_NOT_FOUND = "machine.not_found"
     MACHINE_MERGE_SELF = "machine.merge.self"
     MACHINE_ENROLLMENT_REVOKED = "machine.enrollment.revoked"
+    MACHINE_ENROLLMENT_APPROVAL_REQUIRED = "machine.enrollment.approval_required"
     USER_NOT_FOUND = "user.not_found"
     USER_EMAIL_TAKEN = "user.email.taken"
     USER_SELF_FORBIDDEN = "user.self.forbidden"

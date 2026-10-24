@@ -22,10 +22,16 @@ export const ERROR_MESSAGES: Record<string, string> = {
   'auth.token.invalid': 'Jeton invalide',
   'auth.token.revoked': 'Jeton révoqué',
   'auth.enrollment_secret.invalid': "Secret d'enrôlement invalide",
+  'auth.account.locked':
+    'Compte verrouillé après trop d’essais. Réessayez dans un quart d’heure, ou demandez à un administrateur de réinitialiser le mot de passe.',
+  'auth.refresh.invalid': 'Session expirée : reconnectez-vous',
+  'auth.refresh.superseded': 'Session renouvelée entre-temps : réessayez',
   'password.current.invalid': 'Mot de passe actuel incorrect',
   'password.reset_token.invalid': 'Ce lien de réinitialisation est invalide ou a expiré',
   'machine.not_found': 'Poste introuvable',
   'machine.merge.self': 'Un poste ne peut pas être fusionné avec lui-même',
+  'machine.enrollment.approval_required':
+    'Ce poste est déjà enrôlé : son ré-enrôlement attend l’approbation d’un administrateur',
   'machine.enrollment.revoked':
     "Poste révoqué : autorisez le ré-enrôlement depuis sa fiche pour qu'il revienne",
   'user.not_found': 'Compte introuvable',
