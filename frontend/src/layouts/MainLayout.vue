@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from 'src/stores/auth';
 
@@ -56,15 +56,8 @@ const drawer = ref(false);
 const auth = useAuthStore();
 const router = useRouter();
 
-onMounted(() => {
-  // Restore the user profile after a page reload if a token is present.
-  if (auth.isAuthenticated && !auth.user) {
-    void auth.fetchMe();
-  }
-});
-
-function onLogout() {
-  auth.logout();
+async function onLogout() {
+  await auth.logout();
   void router.push({ name: 'login' });
 }
 </script>

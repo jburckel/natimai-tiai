@@ -15,6 +15,7 @@ def record(
     action: str,
     resource_type: str,
     resource_id: str,
+    ip: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
     """Queue one audit entry on the caller's transaction.
@@ -30,6 +31,7 @@ def record(
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
+            ip=ip,
             details=details or {},
         )
     )

@@ -18,7 +18,11 @@ from app.features.inventory.models import (  # noqa: F401
 from app.features.machine.models import Machine  # noqa: F401
 from app.features.notification.models import EmailOutbox  # noqa: F401
 from app.features.threat.models import Threat  # noqa: F401
-from app.features.user.models import PasswordResetToken, User  # noqa: F401
+from app.features.user.models import (  # noqa: F401
+    PasswordResetToken,
+    RefreshToken,
+    User,
+)
 from app.features.windows_update.models import WindowsUpdate  # noqa: F401
 
 __all__ = [
@@ -27,6 +31,7 @@ __all__ = [
     "Command",
     "User",
     "PasswordResetToken",
+    "RefreshToken",
     "WindowsUpdate",
     "MemoryModule",
     "Disk",

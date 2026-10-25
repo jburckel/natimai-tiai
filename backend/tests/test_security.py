@@ -60,7 +60,24 @@ def test_verify_password_rejects_a_non_bcrypt_hash():
 def test_jwt_roundtrip():
     """A created access token decodes back to its subject."""
     user_id = uuid.uuid4()
-    token = security.create_access_token(user_id)
+    token = security.create_access_token(user_id, "stamp-1")
     payload = security.decode_access_token(token)
     assert payload["sub"] == str(user_id)
     assert payload["type"] == "access"
+    assert payload["stamp"] == "stamp-1"
+
+
+def test_jwt_of_another_type_is_not_an_access_token():
+    """Same key, other purpose: the ``type`` claim is checked, not just set."""
+    import jwt as pyjwt
+    import pytest
+
+    from app.core.config import settings
+
+    forged = pyjwt.encode(
+        {"sub": str(uuid.uuid4()), "type": "password_reset", "exp": 9999999999},
+        settings.SECRET_KEY,
+        algorithm=security.ALGORITHM,
+    )
+    with pytest.raises(pyjwt.InvalidTokenError):
+        security.decode_access_token(forged)

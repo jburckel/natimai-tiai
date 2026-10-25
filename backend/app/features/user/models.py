@@ -1,4 +1,5 @@
 import enum
+import secrets
 import uuid
 from datetime import datetime
 
@@ -6,6 +7,11 @@ from sqlalchemy import Column, ForeignKey
 from sqlmodel import Field, SQLModel
 
 from app.features.base import utc_field, utcnow
+
+
+def new_security_stamp() -> str:
+    """A fresh random stamp; any change of it ends the account's sessions."""
+    return secrets.token_hex(16)
 
 
 class Role(enum.StrEnum):
@@ -64,8 +70,41 @@ class User(SQLModel, table=True):
     # rejected (app.api.deps), so resetting a password ends existing sessions —
     # otherwise a compromised account would stay reachable until token expiry.
     password_changed_at: datetime | None = utc_field(default=None, nullable=True)
+    # Carried by every access token and compared on each request. Rotated
+    # whenever what a session may do changes — password, role, activation,
+    # e-mail — which ends every session at once, refresh tokens included.
+    security_stamp: str = Field(default_factory=new_security_stamp, max_length=64)
+    # Consecutive failed logins, reset by a successful one. Reaching
+    # LOGIN_MAX_FAILED_ATTEMPTS sets ``locked_until`` and starts over at zero.
+    failed_login_attempts: int = Field(default=0)
+    locked_until: datetime | None = utc_field(default=None, nullable=True)
     created_at: datetime = utc_field(default_factory=utcnow)
     updated_at: datetime = utc_field(default_factory=utcnow)
+
+
+class RefreshToken(SQLModel, table=True):
+    """A console refresh token, kept hashed, rotated at each use.
+
+    Each login starts a *family*; every renewal marks the presented token used
+    and issues the next one in the same family. A used token presented again
+    (outside the two-tabs race window) means it was copied: the whole family
+    is revoked, the thief's and the owner's sessions alike.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    # SHA-256 of the cookie value: a database leak hands out no session.
+    token_hash: str = Field(primary_key=True, max_length=64)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        )
+    )
+    family: str = Field(index=True, max_length=64)
+    issued_at: datetime = utc_field(default_factory=utcnow)
+    expires_at: datetime = utc_field()
+    used_at: datetime | None = utc_field(default=None, nullable=True)
+    revoked_at: datetime | None = utc_field(default=None, nullable=True)
 
 
 class PasswordResetToken(SQLModel, table=True):

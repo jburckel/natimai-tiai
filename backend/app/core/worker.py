@@ -27,7 +27,7 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
-from app.core.db import engine
+from app.core.db import assert_not_superuser, engine
 from app.features.base import utcnow
 from app.features.command.models import Command, CommandStatus
 from app.features.machine.models import Machine
@@ -166,6 +166,7 @@ async def run_due_jobs(jobs: list[Job], now: datetime) -> None:
 
 
 async def main(stop: asyncio.Event) -> None:
+    await assert_not_superuser()
     jobs = build_jobs(utcnow())
     logger.info("Worker started: %d jobs, tick %ds", len(jobs), POLL_SECONDS)
     while not stop.is_set():

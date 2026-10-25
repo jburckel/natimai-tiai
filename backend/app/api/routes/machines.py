@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field, computed_field
 from sqlalchemy import case, exists, func, or_
 from sqlalchemy.sql.elements import ColumnElement, UnaryExpression
@@ -17,6 +17,7 @@ from app.api.deps import CurrentUser, SessionDep, require_permission
 from app.api.xlsx_export import xlsx_response
 from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
+from app.core.net import client_ip
 from app.features.audit import crud as audit
 from app.features.base import utcnow
 from app.features.command.models import Command, CommandStatus, CommandType
@@ -267,6 +268,11 @@ class MachineDetailOut(MachineOut):
     # back: « autoriser le ré-enrôlement » (the fleet secret no longer clears
     # a revocation on its own).
     token_revoked: bool
+    # A re-enrollment held for approval: the fleet secret was presented for
+    # this identity while it still had a live token. Shown with its source
+    # address so the administrator can tell a reinstall from an impostor.
+    reenroll_requested_at: datetime | None
+    reenroll_requested_ip: str | None
     first_seen: datetime
     created_at: datetime
     updated_at: datetime
@@ -1302,7 +1308,7 @@ async def list_duplicates(
     dependencies=[Depends(require_permission(Resource.MACHINE, Action.WRITE))],
 )
 async def revoke_token(
-    machine_id: uuid.UUID, session: SessionDep, user: CurrentUser
+    machine_id: uuid.UUID, request: Request, session: SessionDep, user: CurrentUser
 ) -> dict[str, str]:
     """Revoke a machine's token (kill-switch): its next call is rejected, and
     so is any re-enrollment attempt — the fleet-wide secret must not be enough
@@ -1317,6 +1323,7 @@ async def revoke_token(
         action="machine.revoke_token",
         resource_type="machine",
         resource_id=str(machine.id),
+        ip=client_ip(request),
         details={"hostname": machine.hostname, "machine_uuid": machine.machine_uuid},
     )
     await session.commit()
@@ -1328,18 +1335,28 @@ async def revoke_token(
     dependencies=[Depends(require_permission(Resource.MACHINE, Action.WRITE))],
 )
 async def allow_reenroll(
-    machine_id: uuid.UUID, session: SessionDep, user: CurrentUser
+    machine_id: uuid.UUID, request: Request, session: SessionDep, user: CurrentUser
 ) -> dict[str, str]:
-    """Lift a revocation: the machine may enroll again with the shared secret.
+    """Let the machine enroll again with the shared secret.
+
+    Two situations, one gesture: lifting a revocation, and approving a
+    re-enrollment held because the poste still had a live token (a reinstall —
+    or an impostor, which is why it is a human's call).
 
     The old token stays dead — ``token_hash`` is cleared rather than left in
-    place, so a token stolen before the revocation never comes back to life.
-    The poste returns on its next enrollment attempt with a fresh token (its
-    agent drops the stale token on the first 401 and re-enrolls by itself).
+    place, so a token stolen before never comes back to life. The poste returns
+    on its next enrollment attempt with a fresh token (its agent drops a stale
+    token on the first 401, and retries a held enrollment by itself).
     """
     machine = await _require_machine(session, machine_id)
+    details = {"hostname": machine.hostname, "machine_uuid": machine.machine_uuid}
+    if machine.reenroll_requested_at is not None:
+        details["requested_at"] = machine.reenroll_requested_at.isoformat()
+        details["requested_ip"] = machine.reenroll_requested_ip
     machine.token_revoked = False
     machine.token_hash = None
+    machine.reenroll_requested_at = None
+    machine.reenroll_requested_ip = None
     machine.updated_at = utcnow()
     audit.record(
         session,
@@ -1347,7 +1364,8 @@ async def allow_reenroll(
         action="machine.allow_reenroll",
         resource_type="machine",
         resource_id=str(machine.id),
-        details={"hostname": machine.hostname, "machine_uuid": machine.machine_uuid},
+        ip=client_ip(request),
+        details=details,
     )
     await session.commit()
     return {"status": "reenroll-allowed"}
@@ -1365,7 +1383,11 @@ class MergeRequest(BaseModel):
     dependencies=[Depends(require_permission(Resource.MACHINE, Action.WRITE))],
 )
 async def merge_machine(
-    machine_id: uuid.UUID, payload: MergeRequest, session: SessionDep
+    machine_id: uuid.UUID,
+    payload: MergeRequest,
+    request: Request,
+    session: SessionDep,
+    user: CurrentUser,
 ) -> MachineDetailOut:
     """Merge a duplicate record into this one (plan §8): the source's threats
     and commands are reattached here, the verification flag is cleared, and the
@@ -1379,6 +1401,23 @@ async def merge_machine(
         )
     target = await _require_machine(session, machine_id)
     source = await _require_machine(session, payload.source_id)
+    # Recorded before the merge deletes the source: afterwards nothing else
+    # says which poste was folded into this one.
+    audit.record(
+        session,
+        actor=user.email,
+        action="machine.merge",
+        resource_type="machine",
+        resource_id=str(target.id),
+        ip=client_ip(request),
+        details={
+            "hostname": target.hostname,
+            "machine_uuid": target.machine_uuid,
+            "source_id": str(source.id),
+            "source_hostname": source.hostname,
+            "source_machine_uuid": source.machine_uuid,
+        },
+    )
     await machine_crud.merge_into(session, target=target, source=source)
     await session.commit()
     await session.refresh(target)

@@ -44,11 +44,19 @@ Ajouter une dépendance : `uv add <pkg>` (ou `uv add --dev <pkg>` pour le groupe
 
 **Agent** (auth : secret d'enrôlement puis token par poste)
 - `POST /api/v1/agent/enroll` — en-tête `X-Enrollment-Secret`, renvoie le token du poste.
+  Un `machine_uuid` qui détient déjà un token valide reçoit un 403
+  `machine.enrollment.approval_required` : la demande attend
+  `POST /api/v1/machines/{id}/allow-reenroll` depuis la console.
 - `POST /api/v1/agent/heartbeat` — `Authorization: Bearer <token>`, renvoie les commandes en attente.
 - `POST /api/v1/agent/commands/{id}/result` — résultat d'exécution.
 
 **Console** (auth : JWT utilisateur)
-- `POST /api/v1/auth/login` — email + mot de passe (OAuth2 password), renvoie un JWT.
+- `POST /api/v1/auth/login` — email + mot de passe (OAuth2 password) : jeton
+  d'accès de 15 min dans le corps, cookie de renouvellement HttpOnly (chemin
+  `/api/v1/auth`). 423 `auth.account.locked` après 5 échecs consécutifs.
+- `POST /api/v1/auth/refresh` — échange le cookie contre un jeton d'accès et un
+  cookie neufs. Un cookie déjà tourné, présenté de nouveau, ferme toute la session.
+- `POST /api/v1/auth/logout` — ferme la session du navigateur (cookie seul).
 - `GET  /api/v1/auth/me` — utilisateur courant.
 - `GET  /api/v1/machines` / `GET /api/v1/machines/{id}` — lecture (permission `machine:read`).
 - `POST /api/v1/commands` — file une commande par poste (permission `command:execute`, admin).
@@ -106,7 +114,14 @@ répondre, son résultat s'inscrit malgré tout sur la ligne d'origine.
 
 ## Utilisateurs & permissions
 
-Les opérateurs se connectent en **JWT** (email + mot de passe, hash bcrypt). Deux
+Les opérateurs se connectent par email + mot de passe (hash bcrypt). La session
+tient en deux jetons : un **jeton d'accès** JWT de 15 min, gardé en mémoire par
+la console, et un **cookie de renouvellement** HttpOnly, opaque, stocké haché et
+tourné à chaque usage. Le jeton d'accès porte l'empreinte de sécurité du compte
+(`security_stamp`) : changer son mot de passe, son rôle, son activation ou son
+adresse la renouvelle et ferme toutes ses sessions. Un compte est verrouillé
+15 min après 5 échecs consécutifs ; une réinitialisation par un administrateur
+le déverrouille. Les adresses sont comparées sans tenir compte de la casse. Deux
 rôles ([models.py](app/features/user/models.py)) :
 
 | Rôle | Capacités |

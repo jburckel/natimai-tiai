@@ -76,18 +76,65 @@ def generate_password() -> str:
     return secrets.token_urlsafe(_PASSWORD_BYTES)
 
 
-def create_access_token(subject: str | Any) -> str:
+TOKEN_TYPE_ACCESS = "access"  # noqa: S105 — a token kind, not a secret
+
+
+def create_access_token(subject: str | Any, stamp: str) -> str:
     """Create a signed JWT access token for a user id.
 
-    ``iat`` is included so a password change can invalidate tokens issued
-    before it (see ``app.api.deps.get_current_user``).
+    ``stamp`` is the account's security stamp at issue time: rotating it (a
+    password, role or activation change) ends every session at once (see
+    ``app.api.deps.get_current_user``). ``iat`` stays for the password-change
+    check that predates the stamp.
     """
     now = datetime.now(UTC)
     expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"exp": expire, "iat": now, "sub": str(subject), "type": "access"}
+    payload = {
+        "exp": expire,
+        "iat": now,
+        "sub": str(subject),
+        "type": TOKEN_TYPE_ACCESS,
+        "stamp": stamp,
+    }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
-    """Decode and verify a JWT access token (raises on invalid/expired)."""
-    return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+    """Decode and verify a JWT access token (raises on invalid/expired).
+
+    The ``type`` claim is checked, not just set: a JWT signed with the same
+    key for another purpose must not open a session.
+    """
+    payload: dict[str, Any] = jwt.decode(
+        token,
+        settings.SECRET_KEY,
+        algorithms=[ALGORITHM],
+        options={"require": ["exp", "sub", "type"]},
+    )
+    if payload.get("type") != TOKEN_TYPE_ACCESS:
+        raise jwt.InvalidTokenError("not an access token")
+    return payload
+
+
+# --- Console refresh tokens (opaque, stored hashed) -------------------------
+
+
+def generate_refresh_token() -> str:
+    """A random refresh token for the HttpOnly cookie (never a JWT: it means
+    nothing without its row, which is what makes it revocable)."""
+    return secrets.token_urlsafe(_TOKEN_BYTES)
+
+
+# A real bcrypt hash of nothing anyone knows, checked when the e-mail matches
+# no account: the login then costs one bcrypt either way, and its duration no
+# longer says whether the address has an account. Computed on first use — it
+# costs a bcrypt round.
+_dummy_hash: str | None = None
+
+
+def burn_password_check(password: str) -> None:
+    """Spend the time of a password check against a hash that never matches."""
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = get_password_hash(secrets.token_urlsafe(_PASSWORD_BYTES))
+    verify_password(password, _dummy_hash)

@@ -177,10 +177,9 @@ async function onSubmit() {
   loading.value = true;
   try {
     await changePassword(currentPassword.value, newPassword.value);
-    // The backend invalidates every token issued before the change, including
-    // the one that authenticated this request — so log out deliberately rather
-    // than letting the next call fail with a confusing 401.
-    auth.logout();
+    // The backend ends every session of the account, this one included — so
+    // log out deliberately rather than letting the next call fail with a 401.
+    await auth.logout();
     $q.notify({
       type: 'positive',
       message: 'Mot de passe changé. Reconnectez-vous.',
