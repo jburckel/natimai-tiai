@@ -1,4 +1,6 @@
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
@@ -6,6 +8,7 @@ from starlette.middleware.cors import CORSMiddleware
 from app.api import api_router
 from app.api.routes.health import router as health_router
 from app.core.config import settings
+from app.core.db import assert_not_superuser
 from app.core.errors import register_error_handlers
 
 # uvicorn wires handlers for its own loggers only: without this, the app's
@@ -16,9 +19,19 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    # Before the first request: a misconfigured database role must stop the
+    # deploy, not be discovered after an incident.
+    await assert_not_superuser()
+    yield
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan,
 )
 
 # Standardized error envelope for every error response (plan §2.14).

@@ -23,8 +23,18 @@
 		-Server
 	}
 
-	# API backend
+	# Mêmes plafonds de taille qu'en prod (voir le Caddyfile).
+	handle /api/v1/agent/* {
+		request_body {
+			max_size 8MB
+		}
+		reverse_proxy backend:8000
+	}
+
 	handle /api/* {
+		request_body {
+			max_size 1MB
+		}
 		reverse_proxy backend:8000
 	}
 

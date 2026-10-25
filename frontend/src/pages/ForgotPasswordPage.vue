@@ -2,7 +2,7 @@
   <!-- Route montée hors de MainLayout : QPage exige un QLayout ancêtre. -->
   <q-layout view="lHh Lpr lFf">
     <q-page-container>
-      <q-page class="flex flex-center bg-grey-2">
+      <q-page class="flex flex-center surface-grey">
         <q-card style="width: 380px; max-width: 90vw">
           <q-card-section class="text-center">
             <q-icon name="lock_reset" size="48px" color="primary" />
@@ -10,13 +10,14 @@
           </q-card-section>
 
           <template v-if="!sent">
-            <q-card-section class="q-pt-none text-body2 text-grey-8">
+            <q-card-section class="q-pt-none text-body2 text-muted">
               Indiquez l'adresse de votre compte : un lien de réinitialisation vous sera envoyé.
             </q-card-section>
 
             <q-form @submit="onSubmit">
               <q-card-section class="q-pt-none">
                 <q-input
+                  autocomplete="email"
                   v-model="email"
                   type="email"
                   label="E-mail"

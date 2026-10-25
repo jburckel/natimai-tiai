@@ -12,13 +12,15 @@ least the acting admin always remains.
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep, require_permission
 from app.api.fields import Email, Password
 from app.core import security
 from app.core.errors import AppError, ErrorCode
+from app.core.net import client_ip
+from app.features.audit import crud as audit
 from app.features.base import utcnow
 from app.features.user import crud
 from app.features.user.models import EmailPreference, Role, User
@@ -45,6 +47,9 @@ class UserOut(BaseModel):
     # something" is a property of the parc's supervision, not a private setting:
     # an account left on « aucun e-mail » is how a fleet ends up unwatched.
     email_preference: str
+    # Set while the account is locked after failed logins; resetting its
+    # password lifts the lock.
+    locked_until: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -144,8 +149,34 @@ async def list_users(
     )
 
 
+def _audit(
+    session: SessionDep,
+    request: Request,
+    current: User,
+    action: str,
+    target: User,
+    details: dict[str, object] | None = None,
+) -> None:
+    """Trace an account-management action, the target named by its e-mail.
+
+    The e-mail rides along because the id alone stops saying anything once
+    the account is deleted — and deletion is one of the actions traced.
+    """
+    audit.record(
+        session,
+        actor=current.email,
+        action=action,
+        resource_type="user",
+        resource_id=str(target.id),
+        ip=client_ip(request),
+        details={"email": target.email, **(details or {})},
+    )
+
+
 @router.post("", response_model=UserOut, status_code=201, dependencies=[_WRITE])
-async def create_user(payload: UserCreate, session: SessionDep) -> UserOut:
+async def create_user(
+    payload: UserCreate, request: Request, session: SessionDep, current: CurrentUser
+) -> UserOut:
     """Create an account with an admin-chosen password."""
     await _reject_email_taken(session, payload.email)
     user = await crud.create_user(
@@ -154,7 +185,11 @@ async def create_user(payload: UserCreate, session: SessionDep) -> UserOut:
         password=payload.password,
         role=payload.role,
         full_name=payload.full_name,
+        commit=False,
     )
+    _audit(session, request, current, "user.create", user, {"role": user.role})
+    await session.commit()
+    await session.refresh(user)
     return UserOut.model_validate(user)
 
 
@@ -168,6 +203,7 @@ async def get_user(user_id: uuid.UUID, session: SessionDep) -> UserOut:
 async def update_user(
     user_id: uuid.UUID,
     payload: UserUpdate,
+    request: Request,
     session: SessionDep,
     current: CurrentUser,
 ) -> UserOut:
@@ -182,12 +218,24 @@ async def update_user(
     if "email" in fields and fields["email"] != user.email:
         await _reject_email_taken(session, fields["email"], exclude=user.id)
 
+    # Old and new value of what actually changed — none of these fields is a
+    # secret, and « role: readonly → admin » is the line an audit is read for.
+    changes: dict[str, object] = {}
     for name, value in fields.items():
         # The str enums are the vocabulary of plain string columns: stored as
         # their value so a read never has to know the enum existed.
         stored = value.value if isinstance(value, Role | EmailPreference) else value
+        if getattr(user, name) != stored:
+            changes[name] = {"from": getattr(user, name), "to": stored}
         setattr(user, name, stored)
     user.updated_at = utcnow()
+    if changes:
+        _audit(session, request, current, "user.update", user, {"changes": changes})
+    # What the account may do, or who it is, changed: its open sessions were
+    # granted under the old terms and end now. (The e-mail cadence or the name
+    # leave them alone.)
+    if changes.keys() & {"role", "is_active", "email"}:
+        await crud.end_sessions(session, user)
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -196,11 +244,12 @@ async def update_user(
 
 @router.delete("/{user_id}", status_code=204, dependencies=[_WRITE])
 async def delete_user(
-    user_id: uuid.UUID, session: SessionDep, current: CurrentUser
+    user_id: uuid.UUID, request: Request, session: SessionDep, current: CurrentUser
 ) -> None:
     """Delete an account for good (prefer deactivation to keep the trail)."""
     user = await _require_user(session, user_id)
     _reject_self(current, user, "delete")
+    _audit(session, request, current, "user.delete", user, {"role": user.role})
     await crud.delete_user(session, user)
     await session.commit()
 
@@ -209,7 +258,11 @@ async def delete_user(
     "/{user_id}/reset-password", response_model=PasswordResetOut, dependencies=[_WRITE]
 )
 async def reset_password(
-    user_id: uuid.UUID, payload: PasswordReset, session: SessionDep
+    user_id: uuid.UUID,
+    payload: PasswordReset,
+    request: Request,
+    session: SessionDep,
+    current: CurrentUser,
 ) -> PasswordResetOut:
     """Set a new password for an account and return it once.
 
@@ -220,5 +273,14 @@ async def reset_password(
     password = payload.password or security.generate_password()
     await crud.set_password(session, user, password)
     await crud.purge_reset_tokens(session, user.id)
+    _audit(
+        session,
+        request,
+        current,
+        "user.reset_password",
+        user,
+        # Whether the admin typed it or the server drew it — never the value.
+        {"generated": payload.password is None},
+    )
     await session.commit()
     return PasswordResetOut(password=password)

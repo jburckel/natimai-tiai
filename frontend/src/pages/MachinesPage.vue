@@ -1,9 +1,10 @@
 <template>
   <q-page padding>
     <div class="row items-center q-col-gutter-sm q-mb-sm">
-      <div class="text-h5 col-auto">Postes</div>
+      <h1 class="text-h5 q-my-none col-auto">Postes</h1>
       <q-space />
       <q-input
+        aria-label="Rechercher un poste"
         v-model="search"
         dense
         outlined
@@ -47,16 +48,39 @@
           {{ filterChips.length }}
         </q-badge>
       </q-btn>
-      <div v-if="lastRefreshedAt" class="text-caption text-grey col-auto">
+      <div v-if="lastRefreshedAt" class="text-caption text-muted col-auto">
         Actualisé à {{ lastRefreshLabel }}
       </div>
-      <q-btn flat dense round icon="download" class="col-auto" @click="exportOpen = true">
+      <q-btn
+        aria-label="Exporter le parc filtré"
+        flat
+        dense
+        round
+        icon="download"
+        class="col-auto"
+        @click="exportOpen = true"
+      >
         <q-tooltip>Exporter le parc filtré (Excel ou CSV, colonnes au choix)</q-tooltip>
       </q-btn>
-      <q-btn flat round icon="refresh" :loading="loading" class="col-auto" @click="reload">
+      <q-btn
+        aria-label="Actualiser"
+        flat
+        round
+        icon="refresh"
+        :loading="loading"
+        class="col-auto"
+        @click="reload"
+      >
         <q-tooltip>{{ autoRefreshHint }}</q-tooltip>
       </q-btn>
     </div>
+
+    <LoadErrorBanner
+      v-if="lastError && !lastRefreshedAt"
+      :error="lastError"
+      :loading="loading"
+      @retry="reload"
+    />
 
     <!-- The dropdowns, folded by default: each is reached for now and then, and
          a bar wearing all of them at once buried the search. Two rows, because
@@ -64,8 +88,9 @@
     <q-slide-transition>
       <div v-show="filtersOpen" class="q-mb-sm">
         <div class="row items-center q-col-gutter-sm q-mb-xs">
-          <div class="col-12 col-sm-auto text-caption text-grey filter-row-label">Sécurité</div>
+          <div class="col-12 col-sm-auto text-caption text-muted filter-row-label">Sécurité</div>
           <q-select
+            aria-label="Antivirus"
             v-model="antivirus"
             :options="antivirusOptions"
             emit-value
@@ -77,6 +102,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="État de protection"
             v-model="status"
             :options="statusOptions"
             emit-value
@@ -88,6 +114,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="Windows Update"
             v-model="wu"
             :options="wuOptions"
             emit-value
@@ -99,6 +126,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="Dernier scan"
             v-model="scan"
             :options="scanOptions"
             emit-value
@@ -111,8 +139,9 @@
           />
         </div>
         <div class="row items-center q-col-gutter-sm">
-          <div class="col-12 col-sm-auto text-caption text-grey filter-row-label">Matériel</div>
+          <div class="col-12 col-sm-auto text-caption text-muted filter-row-label">Matériel</div>
           <q-select
+            aria-label="Système d'exploitation"
             v-model="os"
             :options="osOptions"
             emit-value
@@ -124,6 +153,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="Version de l'agent"
             v-model="agent"
             :options="agentOptions"
             emit-value
@@ -135,6 +165,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="Constructeur"
             v-model="manufacturer"
             :options="manufacturerOptions"
             emit-value
@@ -146,6 +177,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="Modèle"
             v-model="model"
             :options="modelOptions"
             emit-value
@@ -157,6 +189,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="Processeur"
             v-model="processor"
             :options="processorOptions"
             emit-value
@@ -168,6 +201,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="Type de poste"
             v-model="chassis"
             :options="chassisOptions"
             emit-value
@@ -182,6 +216,7 @@
                upgrade question is asked, and no closed list holds every parc's
                sizes. The filter applies once both halves are set. -->
           <q-select
+            aria-label="Comparaison de mémoire"
             v-model="ramOp"
             :options="ramOpOptions"
             emit-value
@@ -193,6 +228,7 @@
             @update:model-value="pushQuery"
           />
           <q-input
+            aria-label="Mémoire en Gio"
             v-model="ramGb"
             type="number"
             min="1"
@@ -208,6 +244,7 @@
             @update:model-value="pushQuery"
           />
           <q-select
+            aria-label="Espace libre du disque système"
             v-model="diskFree"
             :options="diskOptions"
             emit-value
@@ -240,7 +277,7 @@
     </div>
 
     <div v-if="selected.length" class="row items-center q-mb-sm">
-      <div class="text-caption text-grey q-mr-md">{{ selected.length }} sélectionné(s)</div>
+      <div class="text-caption text-muted q-mr-md">{{ selected.length }} sélectionné(s)</div>
       <q-btn-dropdown color="primary" dense label="Action groupée" icon="bolt">
         <q-list>
           <template v-for="section in actionGroups" :key="section.group">
@@ -287,7 +324,11 @@
               {{ timeAgoLabel(props.row.last_seen) }}
             </q-tooltip>
           </q-icon>
-          {{ props.value || props.row.machine_uuid }}
+          <!-- The row opens on click; the name is also a link, so the fiche is
+               reachable with Tab and Enter, and opens in a new tab on demand. -->
+          <router-link :to="detailRoute(props.row, props.pageIndex)" class="row-link" @click.stop>
+            {{ props.value || props.row.machine_uuid }}
+          </router-link>
           <q-icon
             v-if="props.row.needs_verification"
             name="warning"
@@ -301,7 +342,7 @@
       </template>
       <template #body-cell-agent="props">
         <q-td :props="props">
-          <span :class="{ 'text-grey': !props.value }">{{ props.value ?? '—' }}</span>
+          <span :class="{ 'text-muted': !props.value }">{{ props.value ?? '—' }}</span>
           <q-icon
             v-if="isAgentOutdated(props.value, agentLatest)"
             name="system_update_alt"
@@ -316,7 +357,12 @@
       <template #body-cell-antivirus="props">
         <q-td :props="props">
           <q-badge :color="protectionColor(props.row.is_up_to_date)">
-            {{ antivirusLabel(props.row.av_product_name) }}
+            {{
+              protectionBadgeLabel(
+                antivirusLabel(props.row.av_product_name),
+                props.row.is_up_to_date,
+              )
+            }}
           </q-badge>
           <q-tooltip>{{ antivirusTooltip(props.row) }}</q-tooltip>
         </q-td>
@@ -362,7 +408,7 @@
               rounded
               style="width: 90px"
             />
-            <div class="text-caption text-grey">
+            <div class="text-caption text-muted">
               {{ sizeLabel(props.row.system_volume_free_mb) }} libres
             </div>
             <q-tooltip>
@@ -370,7 +416,7 @@
               {{ sizeLabel(props.row.system_volume_total_mb) }}
             </q-tooltip>
           </template>
-          <span v-else class="text-grey">—</span>
+          <span v-else class="text-muted">—</span>
         </q-td>
       </template>
       <template #body-cell-session="props">
@@ -395,8 +441,9 @@
 </template>
 
 <script setup lang="ts">
+import LoadErrorBanner from 'src/components/LoadErrorBanner.vue';
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router';
 import { useQuasar, type QTableColumn } from 'quasar';
 import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from 'src/composables/useAutoRefresh';
 import MachineExportDialog from 'src/components/machine/MachineExportDialog.vue';
@@ -422,6 +469,7 @@ import {
 import {
   bulkSendNotification,
   commandActionGroups,
+  commandConfirm,
   createCommands,
   type CommandAction,
 } from 'src/services/commands';
@@ -446,6 +494,7 @@ import {
   onlineColor,
   onlineIcon,
   onlineLabel,
+  protectionBadgeLabel,
   protectionColor,
   protectionLabel,
   sizeLabel,
@@ -780,14 +829,20 @@ const columns: QTableColumn<Machine>[] = [
 /** Open a poste, carrying the whole list query plus the row's absolute rank in
  * it (`i`). The detail page uses the query to come back to this exact search,
  * and the rank to walk to the previous/next result of it. */
-function goDetail(row: Machine, rowIndex: number) {
+/** The fiche of a row, carrying the list's query and the row's rank so the
+ * fiche can step to the previous and next poste. */
+function detailRoute(row: Machine, rowIndex: number): RouteLocationRaw {
   const p = pagination.value;
   const i = (p.page - 1) * p.rowsPerPage + rowIndex;
-  void router.push({
+  return {
     name: 'machine-detail',
     params: { id: row.id },
     query: { ...buildQuery(), i: String(i) },
-  });
+  };
+}
+
+function goDetail(row: Machine, rowIndex: number) {
+  void router.push(detailRoute(row, rowIndex));
 }
 
 /** One line: overall state, what the Security Center says of the product, and
@@ -1020,7 +1075,7 @@ async function fetchMachines() {
 // every minute, so a page left open shows postes coming online without a
 // keypress. Paused while rows are selected — a bulk action being composed must
 // not have its rows shuffled underneath it.
-const { lastRefreshedAt, refreshNow } = useAutoRefresh(fetchMachines, {
+const { lastRefreshedAt, lastError, refreshNow } = useAutoRefresh(fetchMachines, {
   paused: () => selected.value.length > 0,
 });
 
@@ -1122,14 +1177,8 @@ function runBulk(action: CommandAction) {
   }
   // The count is the whole point of the confirmation here: "sfc sur 1 poste" and
   // "sfc sur 340 postes" are very different decisions.
-  $q.dialog({
-    title: action.label,
-    message: [`Lancer « ${action.label} » sur ${ids.length} poste(s) ?`, action.hint]
-      .filter(Boolean)
-      .join(' '),
-    cancel: true,
-    persistent: true,
-  }).onOk(() => {
+  const withSession = selected.value.filter((m) => m.session_user_present).length;
+  $q.dialog(commandConfirm(action, ids.length, withSession)).onOk(() => {
     void sendBulk(action, ids);
   });
 }
@@ -1187,6 +1236,14 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.row-link {
+  color: inherit;
+  text-decoration: none;
+}
+.row-link:hover,
+.row-link:focus-visible {
+  text-decoration: underline;
+}
 /* The row captions line up with the dropdowns without taking a column. */
 .filter-row-label {
   min-width: 64px;

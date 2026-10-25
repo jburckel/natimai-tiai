@@ -183,9 +183,17 @@ class Machine(SQLModel, table=True):
     session_state: str | None = None  # active / disconnected
     session_is_remote: bool | None = None
 
-    # Per-machine auth: only the token hash is stored.
-    token_hash: str | None = None
+    # Per-machine auth: only the token hash is stored. Indexed: every agent call
+    # looks the machine up by it. Unique: two postes sharing a token would be
+    # indistinguishable (NULLs stay distinct, so un-enrolled rows are fine).
+    token_hash: str | None = Field(default=None, unique=True, index=True)
     token_revoked: bool = Field(default=False)
+    # Set when the fleet secret was presented for a machine_uuid that already
+    # holds a live token: a reinstalled poste, or someone else claiming its
+    # identity. Nothing is minted until an administrator allows it from the
+    # console (allow-reenroll), which clears both columns.
+    reenroll_requested_at: datetime | None = utc_field(default=None, nullable=True)
+    reenroll_requested_ip: str | None = Field(default=None, max_length=64)
 
     first_seen: datetime = utc_field(default_factory=utcnow)
     last_seen: datetime = utc_field(default_factory=utcnow)

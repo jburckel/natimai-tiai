@@ -1,1 +1,21 @@
 // Global styles for the Tiai console.
+
+// Themable surfaces (light and dark), shared with natimai-paie.
+@import 'surfaces.scss';
+
+// Motion is decoration here: an operator who asked the system for less of it
+// gets none — slide-downs, tab panels and ripples included.
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .q-ripple {
+    display: none !important;
+  }
+}

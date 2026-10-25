@@ -6,7 +6,7 @@ from datetime import datetime
 from ipaddress import ip_address
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
 from sqlmodel import select
 
@@ -15,6 +15,7 @@ from app.core import ratelimit, security
 from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
 from app.core.net import client_ip
+from app.features.audit import crud as audit
 from app.features.base import utcnow
 from app.features.command import crud as command_crud
 from app.features.command.models import (
@@ -42,6 +43,26 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 # --- Schemas ---------------------------------------------------------------
 
+# Bounds on what one reported string can write to the database and pour into the
+# console. Generous: a hostname is 15 characters, an FQDN domain rarely 60, an
+# OS caption ~50. Above this the value has stopped describing a poste — a broken
+# agent, or a hostile one — and it is cut rather than stored whole.
+TEXT_MAX = 200
+# A machine_uuid is a UUID (36 characters); it is the identity key, so it is
+# refused rather than cut — two truncated keys could collide.
+MACHINE_UUID_MAX = 64
+# Defender keeps a few weeks of history; a poste reporting more detections than
+# this in one heartbeat is not describing a real infection. The excess is
+# dropped so the rest of the heartbeat still lands.
+MAX_THREATS = 1000
+
+
+def _bounded(value: str | None) -> str | None:
+    """Cap a reported string — never 422, same trade-off as ``ip_address``."""
+    if value is None:
+        return None
+    return value[:TEXT_MAX]
+
 
 class Fingerprint(BaseModel):
     """Identity fingerprint components reported by the agent."""
@@ -50,16 +71,26 @@ class Fingerprint(BaseModel):
     smbios_uuid: str | None = None
     tpm_ek_hash: str | None = None
 
+    @field_validator("machine_guid", "smbios_uuid", "tpm_ek_hash")
+    @classmethod
+    def _bound_text(cls, value: str | None) -> str | None:
+        return _bounded(value)
+
 
 class EnrollRequest(BaseModel):
     """First-contact payload (authenticated by X-Enrollment-Secret header)."""
 
-    machine_uuid: str
+    machine_uuid: str = Field(min_length=1, max_length=MACHINE_UUID_MAX)
     hostname: str | None = None
     domain: str | None = None
     os_version: str | None = None
     agent_version: str | None = None
     fingerprint: Fingerprint | None = None
+
+    @field_validator("hostname", "domain", "os_version", "agent_version")
+    @classmethod
+    def _bound_text(cls, value: str | None) -> str | None:
+        return _bounded(value)
 
 
 class EnrollResponse(BaseModel):
@@ -88,6 +119,11 @@ class DefenderState(BaseModel):
     last_full_scan: datetime | None = None
     # Normal / Passive / SxS Passive Mode / EDR Block Mode (AMRunningMode).
     running_mode: str | None = None
+
+    @field_validator("signature_version", "running_mode")
+    @classmethod
+    def _bound_text(cls, value: str | None) -> str | None:
+        return _bounded(value)
 
 
 class AVProduct(BaseModel):
@@ -132,6 +168,11 @@ class SessionState(BaseModel):
     state: str | None = None  # active / disconnected
     is_remote: bool = False
 
+    @field_validator("username", "state")
+    @classmethod
+    def _bound_text(cls, value: str | None) -> str | None:
+        return _bounded(value)
+
 
 class HeartbeatRequest(BaseModel):
     """State report; threats reported separately as a list of raw dicts."""
@@ -158,6 +199,17 @@ class HeartbeatRequest(BaseModel):
     inventory: InventoryReport | None = None
     fingerprint: Fingerprint | None = None
     threats: list[ThreatReport] = []
+
+    @field_validator("hostname", "domain", "os_version", "agent_version")
+    @classmethod
+    def _bound_text(cls, value: str | None) -> str | None:
+        return _bounded(value)
+
+    @field_validator("threats")
+    @classmethod
+    def _cap_threats(cls, value: list[ThreatReport]) -> list[ThreatReport]:
+        """Keep the first ``MAX_THREATS`` detections, drop the rest — never 422."""
+        return value[:MAX_THREATS]
 
     @field_validator("ip_address")
     @classmethod
@@ -284,11 +336,12 @@ async def enroll(
 ) -> EnrollResponse:
     """Register a machine (trust on first use) and emit its token once.
 
-    Idempotent on machine_uuid: re-enrollment rotates the token. A known
-    machine_uuid re-enrolling is a guard-rail signal (reinstall vs token theft),
-    and a *revoked* machine is refused outright: the revocation is lifted from
-    the console (allow-reenroll), never by the fleet-wide secret — otherwise
-    anyone holding that secret could undo the kill-switch.
+    A known machine_uuid gets a new token only when it holds none — first
+    contact, or after an administrator's allow-reenroll. One that still holds a
+    live token is held for approval (``ENROLLMENT_REENROLL_REQUIRES_APPROVAL``),
+    and a *revoked* one is refused outright: both are lifted from the console,
+    never by the fleet-wide secret — otherwise anyone holding that secret could
+    take over a poste's identity, or undo the kill-switch.
     """
     result = await session.exec(
         select(Machine).where(Machine.machine_uuid == payload.machine_uuid)
@@ -314,6 +367,44 @@ async def enroll(
                 status_code=403,
                 message="Machine token was revoked; an administrator must "
                 "allow re-enrollment from the console",
+            )
+        if (
+            machine.token_hash is not None
+            and settings.ENROLLMENT_REENROLL_REQUIRES_APPROVAL
+        ):
+            # A live token already exists for this identity. Its own agent never
+            # asks for another while it holds one (it re-enrolls only after
+            # losing it), so this is either a reinstalled poste or someone
+            # presenting the fleet secret under a stolen machine_uuid — the
+            # secret is readable on every poste. Minting here would hand the
+            # identity over and lock the real poste out; the request waits for
+            # an administrator instead, and the live token keeps working.
+            ip = client_ip(request)
+            machine.reenroll_requested_at = utcnow()
+            machine.reenroll_requested_ip = ip
+            audit.record(
+                session,
+                actor="agent",
+                action="machine.reenroll_requested",
+                resource_type="machine",
+                resource_id=str(machine.id),
+                ip=ip,
+                details={
+                    "hostname": payload.hostname,
+                    "machine_uuid": payload.machine_uuid,
+                },
+            )
+            await session.commit()
+            security_log.warning(
+                "re-enrollment of %s from %s held for approval (live token exists)",
+                payload.machine_uuid,
+                ip,
+            )
+            raise AppError(
+                code=ErrorCode.MACHINE_ENROLLMENT_APPROVAL_REQUIRED,
+                status_code=403,
+                message="This machine is already enrolled; an administrator must "
+                "approve the re-enrollment from the console",
             )
         # Re-enrollment of a known identity: a changed hardware anchor is a
         # guard-rail signal (reinstall vs token theft / clone).
@@ -356,6 +447,8 @@ async def enroll(
     if suspicious:
         machine.needs_verification = True
     machine.token_hash = security.hash_token(token)
+    machine.reenroll_requested_at = None
+    machine.reenroll_requested_ip = None
     machine.updated_at = utcnow()
 
     # Every enrollment is a security event: a token was minted. The log line is

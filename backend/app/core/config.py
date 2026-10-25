@@ -14,6 +14,16 @@ def parse_list(v: Any) -> list[str] | str:
     raise ValueError(v)
 
 
+# Minimum lengths enforced outside `local`. SECRET_KEY signs every console JWT
+# (HS256 wants 32 bytes of key); the enrollment secret only opens /agent/enroll,
+# behind a rate limit, but is shared by the whole parc.
+SECRET_MIN_LENGTHS = {
+    "SECRET_KEY": 32,
+    "ENROLLMENT_SECRET": 16,
+    "ENROLLMENT_SECRET_PREVIOUS": 16,
+}
+
+
 class Settings(BaseSettings):
     """Application settings, loaded from environment / .env."""
 
@@ -23,11 +33,33 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "Tia'i"
     API_V1_STR: str = "/api/v1"
-    ENVIRONMENT: Literal["local", "staging", "production"] = "local"
+    # Production unless told otherwise: a deploy `.env` that forgets this line
+    # must get the secret guard below, not skip it. Dev and tests opt out
+    # explicitly (docker-compose.dev.yml, tests/conftest.py).
+    ENVIRONMENT: Literal["local", "staging", "production"] = "production"
     SECRET_KEY: str = "changeme"
 
     # --- Console auth (admin users) ---
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8
+    # Short: the access token lives in the console's memory and is renewed
+    # silently from the refresh cookie. A stolen one is worth a quarter-hour.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    # The refresh token: an HttpOnly cookie no script can read, rotated at each
+    # use and stored hashed (app.features.user.models.RefreshToken). Its life
+    # is how long a console left closed stays logged in.
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    REFRESH_COOKIE_NAME: str = "tiai_refresh"
+    # None = Secure everywhere but `local`, where the dev stack may run on
+    # plain http://localhost.
+    REFRESH_COOKIE_SECURE: bool | None = None
+    # Two tabs renewing at once present the same refresh token; the slower one
+    # finds it already used. Within this window that is a race, not a theft,
+    # and the request is told to retry instead of ending every session.
+    REFRESH_REUSE_GRACE_SECONDS: int = 10
+    # Consecutive failed logins before an account is locked, and for how long.
+    # The rate limiter caps one address; this caps one account, whatever the
+    # number of addresses trying it.
+    LOGIN_MAX_FAILED_ATTEMPTS: int = 5
+    LOGIN_LOCKOUT_MINUTES: int = 15
     # First admin, seeded at startup if it does not exist yet.
     FIRST_ADMIN_EMAIL: str | None = None
     FIRST_ADMIN_PASSWORD: str | None = None
@@ -43,6 +75,15 @@ class Settings(BaseSettings):
     # --- Agent enrollment ---
     # Shared secret deployed by GPO; only authorizes POST /agent/enroll.
     ENROLLMENT_SECRET: str = "changeme-enrollment-secret"
+    # The secret being retired, still accepted while the GPO pushes the new one
+    # (both are valid at once; unset it once every poste has the new value).
+    ENROLLMENT_SECRET_PREVIOUS: str | None = None
+    # A machine_uuid that already holds a live token cannot get a new one with
+    # the fleet secret alone: the request waits for an administrator. Without
+    # this, anyone holding the secret — readable on every poste — could take
+    # over any poste's identity and feed the console its state. Turn off only
+    # on a parc that re-images often and accepts that risk.
+    ENROLLMENT_REENROLL_REQUIRES_APPROVAL: bool = True
 
     # --- Remote commands ---
     # How long a queued command stays valid when the request does not carry its
@@ -225,20 +266,29 @@ class Settings(BaseSettings):
     # copies cost three datagrams and remove the single-loss case.
     WOL_PACKET_COUNT: int = 3
 
+    @property
+    def refresh_cookie_secure(self) -> bool:
+        """Whether the refresh cookie is restricted to HTTPS."""
+        if self.REFRESH_COOKIE_SECURE is not None:
+            return self.REFRESH_COOKIE_SECURE
+        return self.ENVIRONMENT != "local"
+
     @model_validator(mode="after")
-    def _refuse_placeholder_secrets(self) -> Self:
+    def _refuse_weak_secrets(self) -> Self:
         """Fail fast outside `local` when a secret is empty or a placeholder.
 
         Guards against an incomplete deploy `.env`: booting production with
         `SECRET_KEY=changeme` would make every console JWT forgeable (plan §7).
         Placeholders in code defaults and deploy/.env.example all start with
-        "changeme".
+        "changeme". The two keys that gate access also have a minimum length:
+        `SECRET_KEY=secret` is no placeholder, and no better.
         """
         if self.ENVIRONMENT == "local":
             return self
         for name in (
             "SECRET_KEY",
             "ENROLLMENT_SECRET",
+            "ENROLLMENT_SECRET_PREVIOUS",
             "POSTGRES_PASSWORD",
             "FIRST_ADMIN_PASSWORD",
         ):
@@ -249,6 +299,14 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"{name} is empty or still a 'changeme' placeholder; refusing "
                     f"to start in {self.ENVIRONMENT} (see deploy/.env.example)"
+                )
+        for name, minimum in SECRET_MIN_LENGTHS.items():
+            secret: str | None = getattr(self, name)
+            if secret is not None and len(secret) < minimum:
+                raise ValueError(
+                    f"{name} must be at least {minimum} characters; refusing to "
+                    f"start in {self.ENVIRONMENT} (generate one with "
+                    f"`openssl rand -hex 32`)"
                 )
         return self
 
